@@ -10,6 +10,7 @@ export const EMBEDDING_DIMENSIONS = 768;
 export async function migrateDatabase(db: PGlite): Promise<void> {
   const sql = await readFile(path.join(process.cwd(), "db/001_initial.sql"), "utf8");
   await db.exec(sql);
+  await db.exec(await readFile(path.join(process.cwd(), "db/002_embedding_dimensions.sql"), "utf8"));
 }
 
 // Omit dataDir for isolated in-memory tests; use an ignored data/ path locally.

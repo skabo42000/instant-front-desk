@@ -24,6 +24,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ingest": "node --conditions=react-server scripts/run-ingest.cjs"
   }
 }

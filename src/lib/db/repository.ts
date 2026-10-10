@@ -7,6 +7,7 @@ export interface StoredBusiness extends Business {
   contactUrl: string | null;
   phone: string | null;
   embeddingModel: string;
+  embeddingDimensions: number;
 }
 export interface PageInput {
   id: string;
@@ -24,6 +25,7 @@ export interface ChunkInput {
   text: string;
   embedding: readonly number[];
   embeddingModel: string;
+  embeddingDimensions?: number;
   contentHash: string;
 }
 export interface SearchHit extends SourceChunk { distance: number }
@@ -41,7 +43,8 @@ export function businessRepository(db: PGlite, businessId: string) {
     throw new Error("Business ID must be a UUID");
   }
   return {
-    async createBusiness(input: Omit<StoredBusiness, "businessId">): Promise<void> {
+    async createBusiness(input: Omit<StoredBusiness, "businessId" | "embeddingDimensions"> & { embeddingDimensions?: number }): Promise<void> {
+      if ((input.embeddingDimensions ?? EMBEDDING_DIMENSIONS) !== EMBEDDING_DIMENSIONS) throw new Error("Embedding dimension mismatch");
       await db.query(`INSERT INTO businesses
         (business_id, id, slug, name, source_url, contact_url, phone, embedding_model)
         VALUES ($1, $1, $2, $3, $4, $5, $6, $7)`,
@@ -50,7 +53,8 @@ export function businessRepository(db: PGlite, businessId: string) {
     async getBusiness(): Promise<StoredBusiness | null> {
       const result = await db.query<StoredBusiness>(`SELECT business_id AS "businessId",
         slug, name, source_url AS "sourceUrl", contact_url AS "contactUrl", phone,
-        embedding_model AS "embeddingModel" FROM businesses WHERE business_id = $1`, [businessId]);
+        embedding_model AS "embeddingModel", embedding_dimensions AS "embeddingDimensions"
+        FROM businesses WHERE business_id = $1`, [businessId]);
       return result.rows[0] ?? null;
     },
     async createCrawlRun(id: string, status = "running", limits: Record<string, number> = {}): Promise<void> {
@@ -75,6 +79,7 @@ export function businessRepository(db: PGlite, businessId: string) {
       return result.rows[0] ?? null;
     },
     async createChunk(input: ChunkInput): Promise<void> {
+      if ((input.embeddingDimensions ?? input.embedding.length) !== EMBEDDING_DIMENSIONS) throw new Error("Embedding dimension mismatch: finite numbers required");
       const embedding = vectorLiteral(input.embedding);
       // Refuse mixed spaces even when their dimensions happen to match.
       const result = await db.query(`INSERT INTO chunks
@@ -102,6 +107,47 @@ export function businessRepository(db: PGlite, businessId: string) {
         WHERE c.business_id = $1 AND c.embedding_model = $3 AND b.embedding_model = $3
         ORDER BY distance, c.id LIMIT $4`, [businessId, queryVector, embeddingModel, limit]);
       return result.rows;
+    },
+    async listPageTexts(): Promise<{ pageUrl: string; text: string }[]> {
+      return (await db.query<{ pageUrl: string; text: string }>(
+        `SELECT url AS "pageUrl", clean_text AS text FROM pages WHERE business_id = $1 ORDER BY url`, [businessId])).rows;
+    },
+    async storeIngestion(runId: string, pages: readonly (Omit<PageInput, "crawlRunId"> & { chunks: readonly ChunkInput[] })[],
+      limits: Record<string, number>): Promise<void> {
+      await db.transaction(async tx => {
+        const business = (await tx.query<{ model: string; dimensions: number }>(
+          `SELECT embedding_model AS model, embedding_dimensions AS dimensions FROM businesses WHERE business_id = $1`, [businessId])).rows[0];
+        if (!business) throw new Error("Business missing");
+        for (const page of pages) for (const chunk of page.chunks) {
+          vectorLiteral(chunk.embedding);
+          if (chunk.embeddingModel !== business.model || (chunk.embeddingDimensions ?? chunk.embedding.length) !== business.dimensions) {
+            throw new Error("Embedding model/dimension mismatch");
+          }
+          if (chunk.pageId !== page.id) throw new Error("Chunk page mismatch");
+        }
+        await tx.query(`INSERT INTO crawl_runs (business_id,id,status,finished_at,limits_json)
+          VALUES ($1,$2,'completed',now(),$3::jsonb)`, [businessId, runId, JSON.stringify(limits)]);
+        for (const page of pages) {
+          await tx.query(`INSERT INTO pages (business_id,id,crawl_run_id,url,title,clean_text,content_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (business_id,id) DO UPDATE SET
+            crawl_run_id=EXCLUDED.crawl_run_id, title=EXCLUDED.title, clean_text=EXCLUDED.clean_text,
+            content_hash=EXCLUDED.content_hash, fetched_at=now()`,
+          [businessId,page.id,runId,page.url,page.title,page.cleanText,page.contentHash]);
+          // Keep stable citations for unchanged chunks; foreign keys protect saved evaluation evidence.
+          await tx.query(`DELETE FROM chunks WHERE business_id=$1 AND page_id=$2 AND NOT (id=ANY($3::uuid[]))`,
+            [businessId,page.id,page.chunks.map(chunk => chunk.id)]);
+          for (const chunk of page.chunks) {
+            await tx.query(`INSERT INTO chunks
+              (business_id,id,page_id,ordinal,heading,text,embedding,embedding_model,content_hash,embedding_dimensions)
+              VALUES ($1,$2,$3,$4,$5,$6,$7::vector,$8,$9,$10) ON CONFLICT (business_id,id) DO NOTHING`,
+            [businessId,chunk.id,page.id,chunk.ordinal,chunk.heading,chunk.text,vectorLiteral(chunk.embedding),
+              chunk.embeddingModel,chunk.contentHash,business.dimensions]);
+          }
+        }
+        const pageIds = pages.map(page => page.id);
+        await tx.query(`DELETE FROM chunks WHERE business_id=$1 AND NOT (page_id=ANY($2::uuid[]))`, [businessId,pageIds]);
+        await tx.query(`DELETE FROM pages WHERE business_id=$1 AND NOT (id=ANY($2::uuid[]))`, [businessId,pageIds]);
+      });
     },
   };
 }
