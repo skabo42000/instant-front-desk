@@ -51,3 +51,11 @@ Develop and test locally first with offline tests (fake sites, fake model respon
   public pages.
 - Claims stay "prototype" until a real business uses it.
 - Setup steps for Bosko (dashboard clicks) must be few and listed exactly; do the rest via CLI/API.
+
+## Decisions after the read-only plan (2026-10-10, coordinator; Bosko can overrule)
+- Judge = Groq (Llama family), free tier; answerer = Gemini cheap model. Different families. Claude API judging only if Bosko approves a paid key later (Claude Pro does not include API access).
+- Answer fallback = Groq. A model must never judge its own family's answer. Embeddings: one provider/model per business; never mix vector spaces (re-embed instead).
+- v1 is local: CLI ingest/eval, local-only question editing, read-only share page. No public admin, no deploy.
+- Crawl scope starts as the exact origin; aliases (www, subdomains) are approved explicitly after validation.
+- Free-tier exhaustion stops work; it never switches on billing. Provider limits stay "unverified" until checked.
+- Build order = the 10 milestones in ai-os/runs/ifd-plan-1 (scaffold, DB, safe fetch, crawl, ingest/retrieve, gateway, UI, questions, eval runner, real adapters). Live two-site validation is a separate gate.
