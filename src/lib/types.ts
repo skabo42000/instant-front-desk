@@ -24,13 +24,15 @@ export interface ModelRequest {
   businessId: string;
   question: string;
   sources: readonly SourceChunk[];
+  systemInstruction?: string;
 }
 
 export interface ModelReply {
   text: string;
   citedChunkIds: string[];
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface ModelAdapter {
-  generate(request: ModelRequest): Promise<ModelReply>;
+  generate(request: ModelRequest, options?: { signal: AbortSignal }): Promise<ModelReply>;
 }
