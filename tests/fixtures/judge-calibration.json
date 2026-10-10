@@ -1,0 +1,6 @@
+[
+  {"id":"supported", "question":"What services are offered?", "evidence":"We offer haircuts.", "answer":"We offer haircuts.", "humanPass":true, "fakeJudgePass":true},
+  {"id":"invented-price", "question":"What does it cost?", "evidence":"Call for pricing.", "answer":"It costs $20.", "humanPass":false, "fakeJudgePass":false},
+  {"id":"correct-refusal", "question":"What are the hours?", "evidence":"We offer haircuts.", "answer":"Hours are not listed.", "humanPass":true, "fakeJudgePass":true},
+  {"id":"unsupported-comparison", "question":"Is this better than a competitor?", "evidence":"We offer haircuts.", "answer":"We are the best in town.", "humanPass":false, "fakeJudgePass":true}
+]

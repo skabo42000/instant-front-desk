@@ -12,6 +12,7 @@ export async function migrateDatabase(db: PGlite): Promise<void> {
   await db.exec(sql);
   await db.exec(await readFile(path.join(process.cwd(), "db/002_embedding_dimensions.sql"), "utf8"));
   await db.exec(await readFile(path.join(process.cwd(), "db/003_question_lists.sql"), "utf8"));
+  await db.exec(await readFile(path.join(process.cwd(), "db/004_eval_reports.sql"), "utf8"));
 }
 
 // Omit dataDir for isolated in-memory tests; use an ignored data/ path locally.

@@ -1,0 +1,3 @@
+BEGIN;
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS report jsonb;
+COMMIT;

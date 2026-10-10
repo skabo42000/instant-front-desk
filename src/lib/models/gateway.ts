@@ -12,6 +12,7 @@ export interface AnswerProvider {
 // Judge settings are deliberately not part of answer routing.
 export interface JudgeConfig { provider: string; model: string; family: string }
 export function assertIndependentJudge(answerFamily: string, judge: JudgeConfig): void {
+  if (!answerFamily.trim() || !judge.family.trim()) throw new Error("Model families must be known.");
   if (answerFamily.trim().toLowerCase() === judge.family.trim().toLowerCase()) {
     throw new Error("Judge must use a different model family from this answer.");
   }
@@ -26,6 +27,7 @@ export interface RequestLog {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCost: null;
+  errorCode?: "FREE_TIER_EXHAUSTED";
 }
 export interface GatewayOptions {
   primary?: AnswerProvider;
@@ -79,7 +81,15 @@ export class ModelGateway {
           }),
         ]);
         status = "success";
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && error.name === "FreeTierExhausted") {
+          // A quota stop must not retry or switch providers.
+          const quotaLog: RequestLog = { provider: route.provider, model: route.model,
+            attempt: logs.length + 1, status: "error", latencyMs: Date.now() - started,
+            inputTokens: null, outputTokens: null, estimatedCost: null, errorCode: "FREE_TIER_EXHAUSTED" };
+          this.options.onLog?.({ ...quotaLog });
+          return { ok: false, logs: [...logs, quotaLog] };
+        }
         // Do not log provider errors: they can contain request data or credentials.
       } finally {
         clearTimeout(timer);
