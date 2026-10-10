@@ -1,66 +1,86 @@
 # Instant Front Desk (working name)
 
-Prototype, 2026-10-10. Nothing is built beyond the scaffold and offline harness.
-See `docs/brief.md` for the goal, scope and current decisions.
+Local prototype, 2026-10-10. Includes bounded website collection, local Postgres
+(PGlite) storage, fake embeddings, retrieval, a guarded answer engine and a minimal
+chat UI. No real model adapters, completed score cards, real-site evaluations,
+customer results or deployment evidence. See `docs/brief.md` for scope and decisions.
 
-Included: a Next.js App Router page, TypeScript, Tailwind, server-only configuration,
-shared types, a scripted fake model, Vitest, and two fictional website fixtures.
-There is no crawler, database, retrieval, working chat, score card or real provider adapter yet.
-There are no customer results, real-site evaluations or deployment evidence.
+## Local use
 
-## Local setup
-
-Use Node.js 22 LTS or newer (the scaffold was checked with Node.js 24.21.0).
+Use Node.js 22 LTS or newer. After dependencies are installed:
 
 ```powershell
-npm install
 npm run dev
 ```
 
-Open http://localhost:3000. Fake mode is the default and needs no keys, database or accounts.
-Tests run offline after dependencies are installed:
+Open http://localhost:3000. The setup page lists businesses in
+`data/instant-front-desk` (ignored by Git). To add an approved website, stop the
+server first, run the following command, then restart the server and refresh:
+
+```powershell
+npm run ingest -- https://approved-site.example/
+npm run dev
+```
+
+The CLI and web server use the same local database folder. Do not run them together:
+PGlite is intended here for one process and one connection. The setup page explains
+these steps; it does not start website collection. `/b/<slug>` has only chat and an
+empty answer-check area. There are no website collection or evaluation endpoints.
+Unknown businesses return 404.
+
+The chat uses the existing fake gateway by default, with no credentials or network
+model calls. Its default script has no replies, so it refuses questions; this is
+not evidence of live answer quality. Offline tests inject scripted replies to
+exercise supported answers and citations. Fake embeddings measure word overlap,
+not meaning. Questions and answers are not persisted; the UI holds only its latest
+answer in memory. Do not add credentials to website text or browser code.
+
+## Chat limits and deployment limitations
+
+`POST /api/chat` accepts a business slug and a question. Questions are limited to
+2,000 characters, streamed request bodies to 12,000 bytes, and answer text to 4,000
+characters. At most five citations are returned, with bounded headings and URLs.
+Oversized or malformed input returns 400. Unsupported/oversized answers produce
+refusals; internal failures return a generic 503 without internal error text.
+Only answer text, kind and citations are returned, never gateway logs or settings.
+
+In-memory limits allow 10 requests per client and 60 per business per minute;
+429 responses include Retry-After. The limiter is shared across routes/reloads in
+one server process, with expired entries removed and a bounded map. A client is
+identified by an HttpOnly, SameSite cookie, not untrusted forwarded IP headers.
+Clearing/changing cookies bypasses the client bucket; the business bucket remains.
+These are local prototype limits: **before deployment**, use a shared limiter across
+processes and a trusted client identity at the hosting boundary. Process restarts
+reset limits. No deployment is authorized by this milestone.
+
+## Settings and offline checks
+
+`.env.example` lists optional settings; local credentials belong only in ignored
+`.env.local`. No credentials are required by this UI. Server configuration, database,
+retrieval and gateway modules are marked `server-only`. Real provider support is
+still pending; setting MODEL_MODE=real does not enable real calls in this UI.
+The brief selects Gemini for answers/embeddings and Groq (Llama family) for an
+independent judge and fallback. Provider limits remain unverified.
 
 ```powershell
 npm run typecheck
 npm run test
+$env:NEXT_TELEMETRY_DISABLED = '1'
 npm run build
 ```
 
-## Settings
+The fixtures are fictional `bright-salon` and `maple-repair` websites. Tests run
+without network access or paid resources. The UI tests render the actual pages
+against two seeded in-memory databases, check separation and the unknown-business
+boundary, and use synthetic credential markers to check rendered output. Route
+tests exercise citations, refusals, both rate buckets, invalid/oversized input,
+output caps and generic errors. They do not simulate browser interaction or prove
+that arbitrary sensitive website content is safe. PGlite does not establish
+multi-connection concurrency safety. No live service readiness has been checked.
 
-`.env.example` contains variable names with empty values. Optional local settings belong
-in the ignored `.env.local`; never paste credentials into chat or commit them.
-`MODEL_MODE=fake` uses no credentials. `MODEL_MODE=real` validates `DATABASE_URL`,
-`GEMINI_API_KEY`, `GEMINI_EVAL_API_KEY` and `GROQ_API_KEY`. Evaluation and answer keys
-must differ. Real mode is configuration validation only; it does not enable real calls.
-Database URLs must use `postgres://` or `postgresql://`. Errors list settings, not their values.
-Keys are never named `NEXT_PUBLIC_*`. The page passes only the mode to the client component;
-configuration and fake model modules are marked `server-only`.
-
-Per the brief's 2026-10-10 decisions: Gemini answers/embeddings, Groq (Llama family) judges
-and answer fallback. Provider free tiers and readiness remain unverified. No paid calls or
-automatic billing fallback are implemented.
-
-## Offline test set and limits
-
-The unit tests cover fake/real configuration, missing keys, invalid settings, client props,
-rendered client output, and scripted reply order/exhaustion/isolation. Vitest substitutes
-an empty `server-only` module because it runs outside Next; Next enforces that import boundary
-in application builds. The props test checks the actual allowlist and client rendering; it
-is not a general secret scanner or proof about future components.
-
-`tests/fixtures/bright-salon` has hours, contact details, services without prices, and robots.txt.
-`tests/fixtures/maple-repair` omits hours/prices and contains an intentional prompt-injection
-string as untrusted test data. These are files for later crawler tests, not live sites;
-no crawling or prompt-injection protection has been tested at this milestone.
-The fake model returns supplied replies without network calls. It does not generate answers,
-retrieve sources or validate grounding.
-
-Verification on 2026-10-10 (run by the coordinator after `npm install`): `npm run typecheck` passed,
-`npm run test` passed (12 tests in 2 files), and `npm run build` passed. These are offline checks of the
-scaffold only; nothing has been tested against a real site or a real model.
-
-Beginner explanation: server settings stay on the server; the browser receives just a small
-safe object. The fake model lets later tests supply predictable answers without paying a provider.
-Exercise: add a test for `MODEL_MODE=real` with only `GEMINI_EVAL_API_KEY` missing, predict the
-error, then run `npm run test -- tests/unit/config.test.ts`. This is practice, not proof of mastery.
+Beginner explanation: the page sends one question and a business name to the server.
+The server looks only in that business's saved pages, then returns an answer or a
+refusal. An empty score means checks have not run, not that answers passed.
+Exercise: change the rate limit in a local test from one to two, predict which
+request receives 429, and run `npm run test -- tests/unit/chat-route.test.ts`.
+This is practice, not evidence of mastery.
