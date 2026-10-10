@@ -1,0 +1,17 @@
+# Secrets and private data never go in git
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+node_modules/
+.next/
+dist/
+coverage/
+*.log
+# Private lead data / crawled customer content / run outputs
+data/
+private/
+reports/private/
+.vercel/
+Thumbs.db
