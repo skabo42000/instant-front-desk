@@ -15,3 +15,5 @@ private/
 reports/private/
 .vercel/
 Thumbs.db
+*.tsbuildinfo
+.npm-cache/
