@@ -24,9 +24,11 @@ describe("business-scoped PGlite repository", () => {
       await repo.createChunk({ id: id(offset + 3), pageId: id(offset + 2), ordinal: 0,
         heading: "Hours", text: `Business ${offset}`, embedding: fakeEmbedding(`business ${offset}`),
         embeddingModel: FAKE_EMBEDDING_MODEL, contentHash: "hash" });
+      await db.query(`INSERT INTO question_lists (business_id,version,approved_at) VALUES ($1,1,now())`, [businessId]);
       await db.query(`INSERT INTO eval_questions
         (business_id, id, version, kind, question, expected_behavior) VALUES ($1,$2,1,'source','Hours?','Cite')`,
       [businessId, id(offset + 4)]);
+      await db.query(`UPDATE eval_questions SET approved_at=now() WHERE business_id=$1`, [businessId]);
       await db.query(`INSERT INTO eval_runs
         (business_id,id,question_version,crawl_run_id,answer_model,judge_model,prompt_version,status)
         VALUES ($1,$2,1,$3,'fake-answer','fake-judge','v1','running')`, [businessId, id(offset + 5), id(offset + 1)]);
@@ -42,7 +44,7 @@ describe("business-scoped PGlite repository", () => {
     expect(await businessRepository(db, B).getChunk(id(103))).not.toBeNull();
     const tables = await db.query<{ table_name: string; is_nullable: string }>(`SELECT table_name, is_nullable
       FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'business_id'`);
-    expect(tables.rows).toHaveLength(10);
+    expect(tables.rows).toHaveLength(11);
     expect(tables.rows.every(row => row.is_nullable === "NO")).toBe(true);
     const indexes = await db.query<{ count: number }>(`SELECT count(*)::int AS count FROM pg_indexes
       WHERE schemaname = 'public' AND (indexdef ILIKE '%hnsw%' OR indexdef ILIKE '%ivfflat%')`);

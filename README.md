@@ -5,6 +5,44 @@ Local prototype, 2026-10-10. Includes bounded website collection, local Postgres
 chat UI. No real model adapters, completed score cards, real-site evaluations,
 customer results or deployment evidence. See `docs/brief.md` for scope and decisions.
 
+## Local evaluation question review
+
+Milestone 8 adds stored question lists and a local CLI, dated 2026-10-10. Stop the
+web server before using this CLI (the same single-process PGlite restriction applies).
+No network or model credentials are used. With an already ingested business UUID:
+
+```powershell
+npm run questions -- <business-uuid> generate
+npm run questions -- <business-uuid> list
+npm run questions -- <business-uuid> show 1
+npm run questions -- <business-uuid> edit 1 <question-uuid> data/replacement.json
+npm run questions -- <business-uuid> approve 2
+```
+
+Replace the angle-bracket values with actual IDs from ingestion/list output. The
+replacement file is a JSON object with `question`, `expectedBehavior`, and
+`evidenceChunkIds` (an array of that business's stored chunk UUIDs). Traps may use
+an empty evidence array. Keep private review files under ignored `data/`.
+
+The fake generator creates 20 section-based questions plus six fixed traps. These
+are repetitive review scaffolding, not measured model-generated question quality.
+Malformed replies or unknown/foreign references remain visible as validation flags
+and prevent approval. Editing copies the whole list into a new unapproved version;
+the previous version remains available. Approval means a human reviewed that
+version, not that any answers passed. The database rejects new eval runs using
+unapproved lists and results referencing another question version. The eval runner
+and completed score cards are still pending milestone 9. Historical chunk evidence
+is protected by foreign keys: later ingestion that removes referenced chunks can
+fail rather than silently destroy review history.
+
+Offline question tests use two fictional businesses in PGlite, including shared
+local chunk IDs, malformed fake replies, all six trap kinds, version edits, approval
+gates and direct SQL checks. No real-site question quality or multi-connection
+concurrency is established. Beginner explanation: each edit saves a fresh copy,
+so a later evaluation can identify exactly which reviewed questions it used.
+Exercise: edit one question, predict which version remains approved, then inspect
+both versions with `show`. This is practice, not proof of mastery.
+
 ## Local use
 
 Use Node.js 22 LTS or newer. After dependencies are installed:

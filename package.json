@@ -25,6 +25,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "ingest": "node --conditions=react-server scripts/run-ingest.cjs"
+    "ingest": "node --conditions=react-server scripts/run-ingest.cjs",
+    "questions": "node --conditions=react-server scripts/run-questions.cjs"
   }
 }
