@@ -59,3 +59,9 @@ Develop and test locally first with offline tests (fake sites, fake model respon
 - Crawl scope starts as the exact origin; aliases (www, subdomains) are approved explicitly after validation.
 - Free-tier exhaustion stops work; it never switches on billing. Provider limits stay "unverified" until checked.
 - Build order = the 10 milestones in ai-os/runs/ifd-plan-1 (scaffold, DB, safe fetch, crawl, ingest/retrieve, gateway, UI, questions, eval runner, real adapters). Live two-site validation is a separate gate.
+
+## Database decision (2026-10-10, coordinator, tested)
+- Local development and tests use PGlite (real Postgres 18 compiled to WebAssembly, runs inside Node; no Docker, no install, no restart). Verified 2026-10-10 in a scratch test: vector search (pgvector via @electric-sql/pglite-pgvector) and advisory locks work; about 390 MB RAM. The PC has 7.7 GB RAM, which is why Docker was skipped.
+- Write plain Postgres SQL (migrations in db/), so the same files run unchanged on real Postgres (Supabase free) later.
+- PGlite has a single connection: true multi-connection concurrency tests can only run on a real Postgres. Say so in test reports; never claim concurrency safety that was not tested.
+- Packages are installed by the coordinator (the Codex sandbox has no network). Do not add dependencies.
