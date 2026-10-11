@@ -26,6 +26,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "ingest": "node --conditions=react-server scripts/run-ingest.cjs",
+    "live": "node --conditions=react-server scripts/run-live.cjs",
     "questions": "node --conditions=react-server scripts/run-questions.cjs",
     "eval": "node --conditions=react-server scripts/run-eval.cjs",
     "calibration": "node --conditions=react-server scripts/run-calibration.cjs"

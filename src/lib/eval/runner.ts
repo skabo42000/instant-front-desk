@@ -46,6 +46,8 @@ export function scoreReport(report: EvalReport) {
 export async function runEvaluation(db: PGlite, businessId: string, version: number, options: {
   crawlRunId: string; judge: Judge; gateway?: ModelGateway; embeddings?: EmbeddingAdapter;
   answerModel?: string;
+  stopReason?: () => string | null;
+  sanitizeResult?: (result: EvalResult) => EvalResult;
   // Injection retains the answer engine boundary while allowing fixed offline fixtures.
   answerQuestion?: (question: string, chunks: readonly RetrievedChunk[]) => Promise<AnswerResult>;
 }): Promise<EvalReport> {
@@ -62,13 +64,15 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
     report.answerModel,report.judgeModel,report.answerPromptVersion]);
   let stopped = false;
   for (const question of list.questions) {
-    const entry: EvalResult = { question, answer: null, verdict: null, error: null };
-    if (stopped) entry.error = "FREE_TIER_STOPPED";
+    let entry: EvalResult = { question, answer: null, verdict: null, error: null };
+    if (options.stopReason?.()) entry.error = options.stopReason()!;
+    else if (stopped) entry.error = "FREE_TIER_STOPPED";
     else try {
       const evidence = (await retrieve(question.question, repo, { adapter: options.embeddings })).chunks;
       entry.answer = await (options.answerQuestion ?? ((q, chunks) => answer(q, chunks, options.gateway)))(question.question, evidence);
       const logs = entry.answer.logs;
-      if (logs.some(log => log.errorCode === "FREE_TIER_EXHAUSTED")) {
+      if (options.stopReason?.()) entry.error = options.stopReason()!;
+      else if (logs.some(log => log.errorCode === "FREE_TIER_EXHAUSTED")) {
         stopped = true;
         entry.error = "FREE_TIER_EXHAUSTED";
       } else if (logs.length && logs.at(-1)?.status !== "success") entry.error = "ANSWER_EXECUTION_ERROR";
@@ -87,6 +91,7 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
       } else entry.error = "EVALUATION_EXECUTION_ERROR";
       // Never store raw exceptions; provider messages may contain credentials.
     }
+    if (options.sanitizeResult) entry = options.sanitizeResult(entry);
     report.results.push(entry);
     await db.transaction(async tx => {
       const resultId = randomUUID();

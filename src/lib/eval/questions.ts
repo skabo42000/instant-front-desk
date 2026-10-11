@@ -155,6 +155,14 @@ export function questionRepository(db: PGlite, businessId: string) {
       });
       return get(version);
     },
+    async approveUnflagged(version: number): Promise<QuestionList> {
+      const list = await get(version);
+      const unflagged = list.questions.filter(q => !q.validationErrors.length);
+      if (!unflagged.length) throw new Error("No unflagged questions to approve");
+      // Keep the original flagged list for human review.
+      const selected = unflagged.length === list.questions.length ? list : await save(unflagged);
+      return this.approve(selected.version);
+    },
     async forRun(version: number): Promise<QuestionList> {
       const list = await get(version);
       if (!list.approvedAt || !list.questions.length || list.questions.some(q => q.validationErrors.length)) throw new Error("Question list is not approved");
