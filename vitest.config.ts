@@ -9,5 +9,6 @@ export default defineConfig({
       "server-only": fileURLToPath(new URL("./tests/helpers/server-only.ts", import.meta.url)),
     },
   },
-  test: { environment: "node", include: ["tests/**/*.test.ts"] },
+  // One file at a time: each test file starts its own in-memory Postgres (~390 MB); parallel runs time out on this PC.
+  test: { environment: "node", include: ["tests/**/*.test.ts"], fileParallelism: false, hookTimeout: 60000 },
 });

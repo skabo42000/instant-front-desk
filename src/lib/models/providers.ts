@@ -79,10 +79,14 @@ function modelName(model: string): string {
   if (!/^[a-zA-Z0-9._-]+$/.test(model)) throw new Error("Invalid model name");
   return model;
 }
-function familyModel(model: string, family: "gemini" | "llama"): void {
-  modelName(model);
-  if (!model.startsWith(`${family}-`)) throw new Error("Model must match the configured family");
+function familyModel(model: string, family: "gemini" | "openai-oss"): void {
+  const prefix = family === "openai-oss" ? "openai/gpt-oss-" : "gemini-";
+  modelName(family === "openai-oss" ? model.replace(/^openai\//, "") : model);
+  if (!model.startsWith(prefix)) throw new Error("Model must match the configured family");
 }
+// Defaults verified live 2026-10-10, may change (coordinator's check).
+const GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite";
+const GROQ_MODEL = "openai/gpt-oss-120b";
 function geminiText(reply: Record<string, unknown>): string {
   const candidate = object(list(reply.candidates)[0]);
   return list(object(candidate.content).parts).map(part => text(object(part).text)).join("");
@@ -97,7 +101,7 @@ function answerReply(raw: unknown): ModelReply {
 export class GeminiAnswer implements ModelAdapter {
   readonly family = "gemini";
   private readonly client: Client;
-  constructor(key: string, transport: HttpTransport, readonly model = "gemini-2.5-flash-lite", timeoutMs?: number) {
+  constructor(key: string, transport: HttpTransport, readonly model = GEMINI_TEXT_MODEL, timeoutMs?: number) {
     familyModel(model, "gemini"); this.client = new Client(key, transport, timeoutMs);
   }
   async generate(request: ModelRequest, options?: { signal: AbortSignal }): Promise<ModelReply> {
@@ -125,6 +129,7 @@ export class GeminiEmbeddings implements EmbeddingAdapter {
     familyModel(model, "gemini"); this.client = new Client(key, transport, timeoutMs);
   }
   async embed(input: string): Promise<number[]> {
+    // The provider defaults to 3072; every call must explicitly request our stored vector size.
     const reply = await this.client.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`, {
       model: `models/${this.model}`, content: { parts: [{ text: input }] }, outputDimensionality: this.dimensions,
     });
@@ -136,7 +141,7 @@ export class GeminiEmbeddings implements EmbeddingAdapter {
 }
 export class GeminiQuestions implements QuestionGenerator {
   private readonly client: Client;
-  constructor(key: string, transport: HttpTransport, readonly model = "gemini-2.5-flash-lite", timeoutMs?: number) {
+  constructor(key: string, transport: HttpTransport, readonly model = GEMINI_TEXT_MODEL, timeoutMs?: number) {
     familyModel(model, "gemini"); this.client = new Client(key, transport, timeoutMs);
   }
   async generate(chunks: readonly SourceChunk[]): Promise<unknown> {
@@ -149,10 +154,10 @@ export class GeminiQuestions implements QuestionGenerator {
   }
 }
 export class GroqAnswer implements ModelAdapter {
-  readonly family = "llama";
+  readonly family = "openai-oss";
   protected readonly client: Client;
-  constructor(key: string, transport: HttpTransport, readonly model = "llama-3.3-70b-versatile", timeoutMs?: number) {
-    familyModel(model, "llama"); this.client = new Client(key, transport, timeoutMs);
+  constructor(key: string, transport: HttpTransport, readonly model = GROQ_MODEL, timeoutMs?: number) {
+    familyModel(model, "openai-oss"); this.client = new Client(key, transport, timeoutMs);
   }
   protected async completion(system: string, data: unknown, signal?: AbortSignal): Promise<unknown> {
     const reply = await this.client.post("https://api.groq.com/openai/v1/chat/completions", {
@@ -181,7 +186,10 @@ export function evaluationProviders(env: Readonly<Record<string, string | undefi
   // Access only isolated evaluation keys, never the existing widget configuration.
   const geminiKey = env.GEMINI_EVAL_API_KEY ?? "";
   const groqKey = env.GROQ_EVAL_API_KEY ?? "";
-  return { embeddings: new GeminiEmbeddings(geminiKey, transport), questions: new GeminiQuestions(geminiKey, transport),
-    answer: new GeminiAnswer(geminiKey, transport), fallback: new GroqAnswer(groqKey, transport),
-    judge: new GroqJudge(groqKey, transport) };
+  const answerModel = env.GEMINI_ANSWER_MODEL ?? GEMINI_TEXT_MODEL;
+  const questionModel = env.GEMINI_QUESTION_MODEL ?? answerModel;
+  const groqModel = env.GROQ_MODEL ?? GROQ_MODEL;
+  return { embeddings: new GeminiEmbeddings(geminiKey, transport), questions: new GeminiQuestions(geminiKey, transport, questionModel),
+    answer: new GeminiAnswer(geminiKey, transport, answerModel), fallback: new GroqAnswer(groqKey, transport, groqModel),
+    judge: new GroqJudge(groqKey, transport, groqModel) };
 }

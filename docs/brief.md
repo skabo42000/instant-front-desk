@@ -65,3 +65,12 @@ Develop and test locally first with offline tests (fake sites, fake model respon
 - Write plain Postgres SQL (migrations in db/), so the same files run unchanged on real Postgres (Supabase free) later.
 - PGlite has a single connection: true multi-connection concurrency tests can only run on a real Postgres. Say so in test reports; never claim concurrency safety that was not tested.
 - Packages are installed by the coordinator (the Codex sandbox has no network). Do not add dependencies.
+
+## Real-adapter defaults update (2026-10-10, coordinator live check)
+- This newer decision supersedes the earlier Groq Llama choice above; historical decisions remain recorded.
+- Defaults verified live 2026-10-10, may change: Gemini answers/questions = `gemini-3.5-flash-lite`; Groq judge/fallback = `openai/gpt-oss-120b`, family `openai-oss`. Source: coordinator's task brief and `../ai-os/projects/instant-front-desk.md`, Next step.
+- `gemini-2.5-flash-lite` is closed to new users. The checked Groq key lists no Llama chat model; `llama-3.3-70b-versatile` failed.
+- Embeddings remain `gemini-embedding-001`. Always request `outputDimensionality: 768` (verified live); the provider default is 3072. Never mix stored vector spaces.
+- Env overrides: `GEMINI_ANSWER_MODEL`, optional `GEMINI_QUESTION_MODEL` (otherwise uses the answer model), and `GROQ_MODEL`. Models must stay within their declared family.
+- A model never judges its own family's answer. Groq fallback answers still cannot be judged by Groq and remain evaluation execution errors.
+- This bounded update uses offline checks only; the prior tiny live calls do not establish quotas, real-site quality or deployment readiness.

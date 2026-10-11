@@ -51,14 +51,14 @@ it("fixed seven-question fixture yields exactly 4/7; stores every failure, full 
 });
 it("actual answer engine runs, preserving citations, models and family; rejects same-family fallback judging",async()=>{
   const spy=vi.fn(async()=>({pass:true,reason:"supported"}));
-  const judge:Judge={provider:"groq",model:"llama-fixture",family:"llama",judge:spy};
+  const judge:Judge={provider:"groq",model:"openai/gpt-oss-fixture",family:"openai-oss",judge:spy};
   const gateway=new ModelGateway({primary:{provider:"fake-gemini",model:"fixture-answer",family:"gemini",adapter:new FakeModel([{text:"Haircuts available.",citedChunkIds:[CHUNK]}])},retry:false});
   const report=await runEvaluation(db,A,version,{crawlRunId:RUN,judge,gateway});
   const supported=report.results.find(r=>r.question.kind==="source")!;
   expect(supported.answer).toMatchObject({kind:"answer",answerFamily:"gemini",citations:[{id:CHUNK}]});
   expect(supported.answer?.logs[0].model).toBe("fixture-answer");
   spy.mockClear();
-  const blocked=await runEvaluation(db,A,version,{crawlRunId:RUN,judge,answerQuestion:async()=>({kind:"refusal",text:"unsupported",citations:[],logs:[],answerFamily:"llama"})});
+  const blocked=await runEvaluation(db,A,version,{crawlRunId:RUN,judge,answerQuestion:async()=>({kind:"refusal",text:"unsupported",citations:[],logs:[],answerFamily:"openai-oss"})});
   expect(spy).not.toHaveBeenCalled(); expect(scoreReport(blocked)).toMatchObject({passed:0,total:7});
   expect(blocked.results.every(r=>r.error)).toBe(true);
 });
@@ -79,12 +79,13 @@ it("real adapter failures and echoed synthetic keys cannot pass or enter saved r
   expect(JSON.stringify(logs)).not.toContain(key);
   expect(await readFile(`data/eval-reports/${report.id}.json`,"utf8")).not.toContain(key);
 });
-it("actual Groq-family gateway fallback cannot be judged by Llama, including a rejected model answer",async()=>{
+it("actual Groq-family gateway fallback cannot be judged by Groq openai-oss, including a rejected model answer",async()=>{
   const judgeCall=vi.fn(async()=>({pass:true,reason:"ok"}));
   const gateway=new ModelGateway({primary:{provider:"gemini",model:"fixture",family:"gemini",adapter:new FakeModel([])},retry:false,
-    fallback:{provider:"groq",model:"llama-fixture",family:"llama",adapter:new FakeModel([{text:"invented answer",citedChunkIds:[CHUNK]}])}});
-  const report=await runEvaluation(db,A,version,{crawlRunId:RUN,gateway,judge:{provider:"groq",model:"llama",family:"llama",judge:judgeCall}});
+    fallback:{provider:"groq",model:"openai/gpt-oss-fixture",family:"openai-oss",adapter:new FakeModel([{text:"invented answer",citedChunkIds:[CHUNK]}])}});
+  const report=await runEvaluation(db,A,version,{crawlRunId:RUN,gateway,judge:{provider:"groq",model:"openai-oss",family:"openai-oss",judge:judgeCall}});
   const source=report.results.find(r=>r.question.kind==="source")!;
-  expect(source.answer).toMatchObject({kind:"refusal",answerFamily:"llama"});
+  expect(source.answer).toMatchObject({kind:"refusal",answerFamily:"openai-oss"});
   expect(source.error).toBe("EVALUATION_EXECUTION_ERROR"); expect(source.verdict).toBeNull();
+  expect(judgeCall).not.toHaveBeenCalledWith(source.question, expect.anything(), expect.anything());
 });

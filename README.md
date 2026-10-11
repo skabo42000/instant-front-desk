@@ -98,7 +98,7 @@ reset limits. No deployment is authorized by this milestone.
 `.env.local`. No credentials are required by this UI. Server configuration, database,
 retrieval and gateway modules are marked `server-only`. Injectable real adapters
 are implemented; setting MODEL_MODE=real does not enable real calls in this UI.
-The brief selects Gemini for answers/embeddings and Groq (Llama family) for an
+The brief selects Gemini for answers/embeddings and Groq (openai-oss family) for an
 independent judge and fallback. Provider limits remain unverified.
 
 ```powershell
@@ -115,7 +115,8 @@ boundary, and use synthetic credential markers to check rendered output. Route
 tests exercise citations, refusals, both rate buckets, invalid/oversized input,
 output caps and generic errors. They do not simulate browser interaction or prove
 that arbitrary sensitive website content is safe. PGlite does not establish
-multi-connection concurrency safety. No live service readiness has been checked.
+multi-connection concurrency safety. Live model availability was checked by the coordinator on 2026-10-10 (details
+below); this does not establish service readiness or real-site answer quality.
 
 Beginner explanation: the page sends one question and a business name to the server.
 The server looks only in that business's saved pages, then returns an answer or a
@@ -143,7 +144,7 @@ The share page displays the latest score and every failure/error. Reports contai
 private website data: keep them local. The ignored folder is not an access-control
 boundary or encryption; Windows file permissions are inherited from the workspace.
 A score measures only the reviewed sample. Execution failures and missing verdicts
-never count as passes. A Llama fallback answer cannot be judged by the Llama judge;
+never count as passes. A Groq openai-oss fallback answer cannot be judged by the Groq openai-oss judge;
 it becomes an execution error until a separately approved independent judge exists.
 
 The four engineer hand-labelled synthetic calibration cases live in
@@ -159,10 +160,18 @@ multi-connection behavior, and no two-site validation or provider quota check ra
 Real adapters in `src/lib/models/providers.ts` have no default network transport;
 call `evaluationProviders(env, transport)` with a fake transport for offline work.
 They use Gemini for answers, questions and 768-dimensional embeddings, and Groq
-Llama for fallback/judging. Responses with the wrong embedding length fail loudly;
+openai/gpt-oss-120b (openai-oss family) for fallback/judging. Responses with the wrong embedding length fail loudly;
 the existing business/chunk metadata stores model and dimension and rejects mixed
-spaces. Default model IDs are configurable constructor arguments, not evidence of
-current availability. Real retrieval thresholds still need calibration.
+spaces. Defaults are verified live 2026-10-10, may change, per the coordinator
+check recorded in `../ai-os/projects/instant-front-desk.md`: Gemini answers/questions
+use gemini-3.5-flash-lite; gemini-2.5-flash-lite is closed to new users. Groq no
+longer lists a Llama chat model on the checked key; llama-3.3-70b-versatile failed.
+Embeddings stay gemini-embedding-001: every call explicitly requests
+outputDimensionality 768 (verified live); its provider default is 3072.
+`evaluationProviders` accepts GEMINI_ANSWER_MODEL, GEMINI_QUESTION_MODEL (defaults
+to the answer model), and GROQ_MODEL from the supplied env object. Constructor
+overrides also work; validation keeps models within their declared family.
+This update was tested offline; no new live check was performed. Real retrieval thresholds still need calibration.
 Malformed replies, non-2xx responses and deadlines return safe errors. A 429 latches
 that adapter off, stops gateway retries/fallback and stops remaining eval work;
 it never enables billing. A later run/session also requires an explicit quota check.
