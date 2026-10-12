@@ -12,8 +12,9 @@ import { questionRepository } from "../src/lib/eval/questions";
 import { runEvaluation, scoreReport, type Judge } from "../src/lib/eval/runner";
 import { evaluationProviders, type HttpTransport } from "../src/lib/models/providers";
 import { assertIndependentJudge, ModelGateway } from "../src/lib/models/gateway";
+import { outputPath } from "../src/lib/output-path";
 
-const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--approve-generated]";
+const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--pause-ms N] [--approve-generated]";
 const KEY_NAMES = ["GEMINI_EVAL_API_KEY", "GROQ_EVAL_API_KEY"] as const;
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -36,6 +37,17 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
   let calls = 0;
   let stop: string | null = null;
+  let limit: LimitDetail | null = null;
+  // Keep only a short label (which service, which window), never the provider's raw message.
+  const recordLimit = (url: string, raw: string, retryAfter: string | null) => {
+    const host = (() => { try { return new URL(url).hostname; } catch { return ""; } })();
+    const window = /per.?day|\b(?:RPD|TPD)\b|daily/i.test(raw) ? "per-day"
+      : /per.?minute|\b(?:RPM|TPM)\b/i.test(raw) ? "per-minute" : "unknown";
+    limit = { service: host.endsWith("groq.com") ? "groq" : host.endsWith("googleapis.com") ? "gemini" : "other",
+      window, kind: /token/i.test(raw) ? "tokens" : /request/i.test(raw) ? "requests" : "unknown",
+      retryAfterSeconds: retryAfter && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) : null };
+    stop = "FREE_TIER_EXHAUSTED";
+  };
   const guarded: HttpTransport = async (url, init) => {
     if (stop) throw new Error(stop);
     if (calls >= maxCalls) { stop = "REQUEST_CAP_REACHED"; throw new Error(stop); }
@@ -49,13 +61,13 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
       return await Promise.race([
         (async () => {
           const response = await transport(url, { ...init, signal: controller.signal, redirect: "error" });
-          if (response.status === 429) { stop = "FREE_TIER_EXHAUSTED"; throw new Error(stop); }
           const raw = await response.text();
+          if (response.status === 429) { recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!); }
           let decoded: unknown;
           try { decoded = JSON.parse(raw); } catch { /* Adapter rejects malformed JSON. */ }
           const hasError = decoded && typeof decoded === "object" && "error" in decoded;
           if ((!response.ok || hasError) && /quota|resource_exhausted|rate.?limit|free.?tier/i.test(raw)) {
-            stop = "FREE_TIER_EXHAUSTED"; throw new Error(stop);
+            recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!);
           }
           // Check both keys, including escaped JSON, before any model data is stored.
           if (keys.some(key => key && (raw.includes(key) || JSON.stringify(decoded)?.includes(key)))) throw new Error("SENSITIVE_REPLY");
@@ -69,9 +81,18 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
     } catch { throw new Error(stop ?? "PROVIDER_REQUEST_FAILED"); }
     finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
   };
-  return { transport: guarded, callsUsed: () => calls, stopReason: () => stop,
+  return { transport: guarded, callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit,
     stopForQuota: () => { stop = "FREE_TIER_EXHAUSTED"; } };
 }
+export interface LimitDetail {
+  service: "gemini" | "groq" | "other";
+  window: "per-minute" | "per-day" | "unknown";
+  kind: "tokens" | "requests" | "unknown";
+  retryAfterSeconds: number | null;
+}
+const describeLimit = (detail: LimitDetail | null) => detail
+  ? `free-tier limit reached: ${detail.service}, ${detail.window}, ${detail.kind}${detail.retryAfterSeconds !== null ? `, retry after ${detail.retryAfterSeconds}s` : ""}`
+  : "free-tier limit reached";
 export interface LiveDependencies {
   env?: Env;
   readEnv?: () => Promise<string>;
@@ -80,6 +101,7 @@ export interface LiveDependencies {
   db?: PGlite;
   judge?: Judge;
   output?: (line: string) => void;
+  sleep?: (ms: number) => Promise<void>;
 }
 export async function main(args: readonly string[], dependencies: LiveDependencies = {}): Promise<void> {
   const env = dependencies.env ?? process.env;
@@ -87,13 +109,17 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
   if (env.LIVE_OK !== "yes") throw new Error("Set LIVE_OK=yes for an explicitly authorized live session.");
   const url = parsePublicUrl(args[0] ?? "");
   if (url.protocol !== "https:") throw new Error(USAGE);
-  let maxCalls = 120, approve = false;
+  // A short pause between questions keeps free per-minute limits from stopping the run.
+  let maxCalls = 120, pauseMs = 3000, approve = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--approve-generated" && !approve) approve = true;
     else if (args[i] === "--max-calls") maxCalls = Number(args[++i]);
+    else if (args[i] === "--pause-ms") pauseMs = Number(args[++i]);
     else throw new Error(USAGE);
   }
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
+  if (!Number.isSafeInteger(pauseMs) || pauseMs < 0 || pauseMs > 60000) throw new Error(USAGE);
+  const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>(done => setTimeout(done, ms)));
   let file = "";
   try { file = await (dependencies.readEnv ?? (() => readFile(resolve(".env.local"), "utf8")))(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot load local evaluation settings."); }
@@ -144,17 +170,17 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model,
       family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: 5000, totalTimeoutMs: 5000 });
     const report = await runEvaluation(db, businessId, approved.version, { crawlRunId: crawlRun.id, judge, gateway,
-      embeddings: providers.embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason,
+      embeddings: providers.embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
       sanitizeResult: entry => JSON.parse(redact(JSON.stringify(entry), keys)) });
     const score = scoreReport(report);
-    await mkdir(resolve("reports/private"), { recursive: true });
-    await writeFile(resolve("reports/private", `${report.id}.json`), redact(JSON.stringify({ ...report, score, callsUsed: budget.callsUsed() }, null, 2), keys), { mode: 0o600 });
+    await mkdir(outputPath("reports/private"), { recursive: true });
+    await writeFile(outputPath("reports/private", `${report.id}.json`), redact(JSON.stringify({ ...report, score, callsUsed: budget.callsUsed(), limit: budget.limitDetail() }, null, 2), keys), { mode: 0o600 });
     print(`score: ${score.passed}/${score.total}`);
     for (const failure of score.failures) print(`failure: ${failure.question.question} — ${(failure.error ?? failure.verdict?.reason ?? "missing verdict").slice(0, 200)}`);
     print(`execution errors: ${report.results.filter(r => r.error).length}`);
-    if (budget.stopReason()) { print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? "free-tier limit reached" : "request cap reached"); process.exitCode = 1; }
+    if (budget.stopReason()) { print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : "request cap reached"); process.exitCode = 1; }
   } catch {
-    print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? "free-tier limit reached" : budget.stopReason() === "REQUEST_CAP_REACHED" ? "request cap reached" : "Live execution failed; no successful evaluation completed.");
+    print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : budget.stopReason() === "REQUEST_CAP_REACHED" ? "request cap reached" : "Live execution failed; no successful evaluation completed.");
     process.exitCode = 1;
   } finally {
     print(`calls used: ${budget.callsUsed()}`);

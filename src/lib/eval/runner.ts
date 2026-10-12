@@ -9,8 +9,9 @@ import { retrieve } from "../retrieve";
 import { assertIndependentJudge, ModelGateway, type JudgeConfig } from "../models/gateway";
 import type { EmbeddingAdapter } from "../models/embeddings";
 import { questionRepository, type Question } from "./questions";
+import { outputPath } from "../output-path";
 
-export const JUDGE_PROMPT_VERSION = "grounding-judge-v1";
+export const JUDGE_PROMPT_VERSION = "grounding-judge-v2";
 export interface Verdict { pass: boolean; reason: string }
 export interface Judge extends JudgeConfig {
   judge(question: Question, result: AnswerResult, evidence: readonly RetrievedChunk[]): Promise<Verdict>;
@@ -47,6 +48,8 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
   crawlRunId: string; judge: Judge; gateway?: ModelGateway; embeddings?: EmbeddingAdapter;
   answerModel?: string;
   stopReason?: () => string | null;
+  // Called before every question except the first (live runs wait a few seconds here).
+  pause?: () => Promise<void>;
   sanitizeResult?: (result: EvalResult) => EvalResult;
   // Injection retains the answer engine boundary while allowing fixed offline fixtures.
   answerQuestion?: (question: string, chunks: readonly RetrievedChunk[]) => Promise<AnswerResult>;
@@ -63,8 +66,9 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
     VALUES ($1,$2,$3,$4,$5,$6,$7,'running')`, [businessId,report.id,version,options.crawlRunId,
     report.answerModel,report.judgeModel,report.answerPromptVersion]);
   let stopped = false;
-  for (const question of list.questions) {
+  for (const [index, question] of list.questions.entries()) {
     let entry: EvalResult = { question, answer: null, verdict: null, error: null };
+    if (index > 0 && options.pause && !stopped && !options.stopReason?.()) await options.pause();
     if (options.stopReason?.()) entry.error = options.stopReason()!;
     else if (stopped) entry.error = "FREE_TIER_STOPPED";
     else try {
@@ -88,7 +92,8 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
     } catch (error) {
       if (error instanceof Error && error.name === "FreeTierExhausted") {
         stopped = true; entry.error = "FREE_TIER_EXHAUSTED";
-      } else entry.error = "EVALUATION_EXECUTION_ERROR";
+      // The live guard may have stopped mid-question (e.g. the judge hit a limit); name that, not a generic error.
+      } else entry.error = options.stopReason?.() ?? "EVALUATION_EXECUTION_ERROR";
       // Never store raw exceptions; provider messages may contain credentials.
     }
     if (options.sanitizeResult) entry = options.sanitizeResult(entry);
@@ -111,7 +116,7 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
   return report;
 }
 export async function exportReport(report: EvalReport): Promise<string> {
-  const directory = resolve("data/eval-reports");
+  const directory = outputPath("data/eval-reports");
   await mkdir(directory, { recursive: true });
   const filename = resolve(directory, `${report.id}.json`);
   await writeFile(filename, JSON.stringify({ ...report, score: scoreReport(report) }, null, 2), { mode: 0o600 });

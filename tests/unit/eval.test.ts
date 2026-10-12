@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { outputPath } from "../../src/lib/output-path";
 import type { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
 import { openDatabase } from "../../src/lib/db/client";
@@ -45,7 +46,7 @@ it("fixed seven-question fixture yields exactly 4/7; stores every failure, full 
   expect(report.results.filter(r=>r.error).every(r=>r.verdict===null)).toBe(true);
   expect(report.answerPromptVersion).toBeTruthy(); expect(report.judgePromptVersion).toBeTruthy();
   expect(await latestReport(db,A)).toEqual(report); expect(await latestReport(db,B)).toBeNull();
-  const saved=await readFile(`data/eval-reports/${report.id}.json`,"utf8");
+  const saved=await readFile(outputPath("data/eval-reports", `${report.id}.json`),"utf8");
   expect(saved).not.toContain("synthetic-secret"); expect(JSON.parse(saved).score).toMatchObject({passed:4,total:7});
   expect((await db.query("SELECT * FROM eval_results WHERE business_id=$1 AND eval_run_id=$2",[A,report.id])).rows).toHaveLength(7);
 });
@@ -77,12 +78,12 @@ it("real adapter failures and echoed synthetic keys cannot pass or enter saved r
   const source=report.results.find(r=>r.question.kind==="source")!;
   expect(source.error).toBe("ANSWER_EXECUTION_ERROR"); expect(source.verdict).toBeNull();
   expect(JSON.stringify(logs)).not.toContain(key);
-  expect(await readFile(`data/eval-reports/${report.id}.json`,"utf8")).not.toContain(key);
+  expect(await readFile(outputPath("data/eval-reports", `${report.id}.json`),"utf8")).not.toContain(key);
 });
 it("actual Groq-family gateway fallback cannot be judged by Groq openai-oss, including a rejected model answer",async()=>{
   const judgeCall=vi.fn(async()=>({pass:true,reason:"ok"}));
   const gateway=new ModelGateway({primary:{provider:"gemini",model:"fixture",family:"gemini",adapter:new FakeModel([])},retry:false,
-    fallback:{provider:"groq",model:"openai/gpt-oss-fixture",family:"openai-oss",adapter:new FakeModel([{text:"invented answer",citedChunkIds:[CHUNK]}])}});
+    fallback:{provider:"groq",model:"openai/gpt-oss-fixture",family:"openai-oss",adapter:new FakeModel([{text:"Invented answer: it costs $99.",citedChunkIds:[CHUNK]}])}});
   const report=await runEvaluation(db,A,version,{crawlRunId:RUN,gateway,judge:{provider:"groq",model:"openai-oss",family:"openai-oss",judge:judgeCall}});
   const source=report.results.find(r=>r.question.kind==="source")!;
   expect(source.answer).toMatchObject({kind:"refusal",answerFamily:"openai-oss"});

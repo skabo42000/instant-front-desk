@@ -175,6 +175,21 @@ This update was tested offline; no new live check was performed. Real retrieval 
 Malformed replies, non-2xx responses and deadlines return safe errors. A 429 latches
 that adapter off, stops gateway retries/fallback and stops remaining eval work;
 it never enables billing. A later run/session also requires an explicit quota check.
+`npm run live` waits 3 seconds between questions (`--pause-ms N`, 0 to 60000). When a free
+limit stops a run, the output and private report name the service (gemini/groq) and, when the
+provider says so, per-minute vs per-day and tokens vs requests. The raw provider message is not stored.
+
+### Live run 2026-10-10 and answer rules v2 (2026-10-12)
+
+The first live run (own salon site, 26 questions) stopped at a free limit after 10 questions, and
+the assistant refused every one of them, including questions the site answers (hours, a service
+description, where prices are listed). Cause: answer rules v1 required every question word to
+appear in a section and only accepted word-for-word copies of a website line. Answer rules v2
+(`grounded-cited-v2`): price/hours/policy questions still need a section with that kind of fact
+and (if named) the service or day; answers may be reworded but must cite sections, and every
+number in an answer must appear in the cited text. Judge rules v2 (`grounding-judge-v2`): a
+refusal fails when the evidence answers a normal question. Tested offline only; not yet re-run live.
+Test runs write reports to a temp folder (`IFD_OUTPUT_ROOT`), not `reports/private`.
 HTTP tests use synthetic keys and fake responses, including echoed key rejection.
 They do not establish real provider behavior or arbitrary sensitive-content safety.
 

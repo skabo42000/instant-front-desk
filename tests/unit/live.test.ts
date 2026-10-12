@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { outputPath } from "../../src/lib/output-path";
 import { readFile } from "node:fs/promises";
 import type { PGlite } from "@electric-sql/pglite";
 import { openDatabase } from "../../src/lib/db/client";
@@ -41,7 +42,7 @@ function fixture(name: string, options: { quotaAt?: number; status?: number; ech
     transport: vi.fn(async ({ url: pageUrl }: { url: URL }) => ({ status: 200,
       headers: { "content-type": pageUrl.pathname === "/robots.txt" ? "text/plain" : "text/html" },
       body: (async function* () { yield Buffer.from(pageUrl.pathname === "/robots.txt" ? "User-agent: *\nAllow: /" : "<html><h1>Haircuts</h1><p>Haircuts available.</p></html>"); })(), destroy() {} })) };
-  return { url, output, transport, dependencies: { env, db, transport, crawlOptions, readEnv: async () => "", output: (line: string) => output.push(line) },
+  return { url, output, transport, dependencies: { env, db, transport, crawlOptions, readEnv: async () => "", output: (line: string) => output.push(line), sleep: async () => {} },
     businessId: stableId(`${new URL(url).origin}|gemini-embedding-001`) };
 }
 it("refuses without LIVE_OK before env-file access or any transport", async () => {
@@ -79,7 +80,10 @@ it("429/quota stops immediately at embedding, answer and judge stages across pro
     const f = fixture(name, { quotaAt, status });
     await main([f.url, "--approve-generated"], f.dependencies);
     expect(f.transport).toHaveBeenCalledTimes(quotaAt);
-    expect(f.output).toContain("free-tier limit reached");
+    expect(f.output.some(line => line.startsWith("free-tier limit reached: "))).toBe(true);
+    // The output names which service hit the limit. The first question is a trap refused without asking
+    // Gemini, so call 4 is the Groq judge and call 5 embeds the second question (Gemini).
+    expect(f.output.join("\n")).toContain(name === "answer-quota" ? "limit reached: groq" : "limit reached: gemini");
     expect(f.output.join("\n")).not.toContain(GEMINI);
     const report = await latestReport(db, f.businessId);
     if (report) expect(JSON.stringify(report)).not.toContain(GEMINI);
@@ -90,7 +94,7 @@ it("rejects cross-provider echoed keys; output and both report copies stay key-f
   await main([f.url, "--approve-generated"], f.dependencies);
   const report = (await latestReport(db, f.businessId))!;
   expect(report.results.some(r => r.error)).toBe(true);
-  for (const content of [f.output.join("\n"), JSON.stringify(report), await readFile(`reports/private/${report.id}.json`, "utf8"), await readFile(`data/eval-reports/${report.id}.json`, "utf8")]) {
+  for (const content of [f.output.join("\n"), JSON.stringify(report), await readFile(outputPath("reports/private", `${report.id}.json`), "utf8"), await readFile(outputPath("data/eval-reports", `${report.id}.json`), "utf8")]) {
     expect(content).not.toContain(GEMINI); expect(content).not.toContain(GROQ);
   }
 });
