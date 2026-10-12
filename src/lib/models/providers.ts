@@ -199,7 +199,8 @@ export function evaluationProviders(env: Readonly<Record<string, string | undefi
   const answerModel = env.GEMINI_ANSWER_MODEL ?? GEMINI_TEXT_MODEL;
   const questionModel = env.GEMINI_QUESTION_MODEL ?? answerModel;
   const groqModel = env.GROQ_MODEL ?? GROQ_MODEL;
-  return { embeddings: new GeminiEmbeddings(geminiKey, transport), questions: new GeminiQuestions(geminiKey, transport, questionModel),
+  // Writing 20 questions from a whole site and judging with evidence take longer than one chat answer.
+  return { embeddings: new GeminiEmbeddings(geminiKey, transport), questions: new GeminiQuestions(geminiKey, transport, questionModel, 30000),
     answer: new GeminiAnswer(geminiKey, transport, answerModel), fallback: new GroqAnswer(groqKey, transport, groqModel),
-    judge: new GroqJudge(groqKey, transport, groqModel) };
+    judge: new GroqJudge(groqKey, transport, groqModel, 15000) };
 }

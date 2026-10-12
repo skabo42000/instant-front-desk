@@ -38,6 +38,12 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
   let calls = 0;
   let stop: string | null = null;
   let limit: LimitDetail | null = null;
+  // Last failed call as "service HTTP 404" or "service timeout": a fixed label, no provider text.
+  let lastFailure: string | null = null;
+  const hostLabel = (url: string) => {
+    try { const host = new URL(url).hostname; return host.endsWith("groq.com") ? "groq" : host.endsWith("googleapis.com") ? "gemini" : "website"; }
+    catch { return "unknown"; }
+  };
   // Keep only a short label (which service, which window), never the provider's raw message.
   const recordLimit = (url: string, raw: string, retryAfter: string | null) => {
     const host = (() => { try { return new URL(url).hostname; } catch { return ""; } })();
@@ -62,6 +68,7 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
         (async () => {
           const response = await transport(url, { ...init, signal: controller.signal, redirect: "error" });
           const raw = await response.text();
+          if (!response.ok) lastFailure = `${hostLabel(url)} HTTP ${response.status}`;
           if (response.status === 429) { recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!); }
           let decoded: unknown;
           try { decoded = JSON.parse(raw); } catch { /* Adapter rejects malformed JSON. */ }
@@ -78,10 +85,13 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
           controller.signal.addEventListener("abort", () => reject(new Error("REQUEST_TIMEOUT")), { once: true });
         }),
       ]);
-    } catch { throw new Error(stop ?? "PROVIDER_REQUEST_FAILED"); }
+    } catch (error) {
+      if (error instanceof Error && error.message === "REQUEST_TIMEOUT") lastFailure = `${hostLabel(url)} timeout after ${timeoutMs} ms`;
+      throw new Error(stop ?? "PROVIDER_REQUEST_FAILED");
+    }
     finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
   };
-  return { transport: guarded, callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit,
+  return { transport: guarded, callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit, lastFailure: () => lastFailure,
     stopForQuota: () => { stop = "FREE_TIER_EXHAUSTED"; } };
 }
 export interface LimitDetail {
@@ -128,7 +138,8 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
   for (const name of ["GEMINI_ANSWER_MODEL", "GEMINI_QUESTION_MODEL", "GROQ_MODEL"]) settings[name] = env[name];
   const keys = KEY_NAMES.map(name => settings[name] ?? "");
   const print = (line: string) => (dependencies.output ?? console.log)(redact(line, keys));
-  const budget = guardedTransport(dependencies.transport ?? ((input, init) => fetch(input, init)), maxCalls, keys);
+  // Outer safety timeout per call; each model step also has its own, shorter limit.
+  const budget = guardedTransport(dependencies.transport ?? ((input, init) => fetch(input, init)), maxCalls, keys, 30000);
   let db: PGlite | undefined;
   try {
     if (redact(url.href, keys) !== url.href) throw new Error("Sensitive URL");
@@ -179,11 +190,15 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     for (const failure of score.failures) print(`failure: ${failure.question.question} — ${(failure.error ?? failure.verdict?.reason ?? "missing verdict").slice(0, 200)}`);
     print(`execution errors: ${report.results.filter(r => r.error).length}`);
     if (budget.stopReason()) { print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : "request cap reached"); process.exitCode = 1; }
-  } catch {
-    print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : budget.stopReason() === "REQUEST_CAP_REACHED" ? "request cap reached" : "Live execution failed; no successful evaluation completed.");
+  } catch (error) {
+    // Show only a fixed error code (e.g. TIMEOUT, MALFORMED), never a raw message that could hold data.
+    const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code
+      : error instanceof Error && /^[A-Z_]{3,40}$/.test(error.message) ? error.message : "UNKNOWN";
+    print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : budget.stopReason() === "REQUEST_CAP_REACHED" ? "request cap reached" : `Live execution failed (${/^[A-Z_]{3,40}$/.test(code) ? code : "UNKNOWN"}); no successful evaluation completed.`);
     process.exitCode = 1;
   } finally {
     print(`calls used: ${budget.callsUsed()}`);
+    if (budget.lastFailure()) print(`last failed call: ${budget.lastFailure()}`);
     if (db && !dependencies.db) await db.close();
   }
 }
