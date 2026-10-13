@@ -7,8 +7,11 @@ import { FakeEmbeddings } from "../../src/lib/models/embeddings";
 import { extractContacts, factPatterns, retrieve } from "../../src/lib/retrieve";
 import { answer } from "../../src/lib/answer";
 import { fixtureCrawl } from "../helpers/fixture-crawl";
+import reviewFixtures from "../fixtures/review-fixes.json";
 const A = "00000000-0000-0000-0000-000000000001";
 const B = "00000000-0000-0000-0000-000000000002";
+const C = "00000000-0000-0000-0000-000000000003";
+const fixtureId = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 let db: PGlite;
 describe("offline retrieval", () => {
   beforeAll(async () => {
@@ -19,8 +22,45 @@ describe("offline retrieval", () => {
         contactUrl: null, embeddingModel: new FakeEmbeddings().model });
       await ingest(`https://${site}.test/`, repo, { crawlOptions: fixtureCrawl(site) });
     }
+    const repo = businessRepository(db, C), adapter = new FakeEmbeddings();
+    await repo.createBusiness({ slug: "review-fixture", name: "Example", sourceUrl: "https://example.test/", phone: null, contactUrl: null, embeddingModel: adapter.model });
+    await repo.createCrawlRun(fixtureId(100), "completed");
+    await repo.createPage({ id: fixtureId(101), crawlRunId: fixtureId(100), url: "https://example.test/", title: "Example", cleanText: reviewFixtures.map(f => f.text).join("\n"), contentHash: "fixture" });
+    for (const [ordinal, fixture] of reviewFixtures.entries()) await repo.createChunk({
+      id: fixtureId(110 + ordinal), pageId: fixtureId(101), ordinal, ...fixture,
+      embedding: await adapter.embed(fixture.text), embeddingModel: adapter.model, contentHash: `fixture-${ordinal}`,
+    });
   }, 30000);
   afterAll(async () => { await db?.close(); });
+  it.each([
+    ["What services do you offer?", ["What we do"]],
+    ["What are the receptionist benefits?", ["What it does"]],
+    ["How do I get started working with you?", ["Talk", "Plan", "Build", "Improve"]],
+  ])("heading retrieval supplies services, benefits and every process step: %s", async (question, headings) => {
+    const result = await retrieve(question as string, businessRepository(db, C), { topK: 1, maxDistance: 0 });
+    expect(result.chunks.slice(0, headings.length).map(chunk => chunk.heading)).toEqual(headings);
+    expect(result.chunks.some(chunk => ["Welcome", "About"].includes(chunk.heading))).toBe(false);
+    expect(new Set(result.chunks.map(chunk => chunk.id)).size).toBe(result.chunks.length);
+    expect(result.chunks.every(chunk => chunk.pageUrl === "https://example.test/")).toBe(true);
+  });
+  it.each([
+    ["Do I need technical skills?", "technical skills"],
+    ["How can I request data deletion?", "deletion"],
+    ["Do you sell my information?", "do not sell"],
+    ["What is your pricing approach?", "Cost depends"],
+    ["What will it cost?", "Cost depends"],
+    ["How long until launch?", "weeks, not months"],
+  ])("keyword retrieval finds narrow facts without vector help: %s", async (question, text) => {
+    const result = await retrieve(question, businessRepository(db, C), { topK: 1, maxDistance: 0 });
+    expect(result.chunks.some(chunk => chunk.text.includes(text))).toBe(true);
+  });
+  it("retrieval gives unrelated queries separate, business-scoped contact sections for refusal fallback", async () => {
+    const result = await retrieve("unlisted VIP price", businessRepository(db, C), { topK: 1, maxDistance: 0 });
+    expect(result.chunks.some(chunk => chunk.heading === "Contact us")).toBe(false);
+    expect(result.contactChunks.map(chunk => chunk.heading)).toEqual(["Contact us"]);
+    expect((await answer("unlisted VIP price", [], undefined, result.contactChunks)).text).toContain("help@example.test");
+    expect((await retrieve("unlisted VIP price", businessRepository(db, A))).contactChunks.every(chunk => chunk.pageUrl === "https://bright-salon.test/")).toBe(true);
+  });
   it("returns relevant fixture chunks in answer shape with stable page citations", async () => {
     const repo = businessRepository(db, A);
     const result = await retrieve("What are your hours?", repo, { topK: 1 });
@@ -38,9 +78,9 @@ describe("offline retrieval", () => {
       expect(result.chunks.every(chunk => chunk.pageUrl === `https://${site}.test/`)).toBe(true);
     }
   });
-  it("overview questions include the homepage's opening section", async () => {
+  it("overview questions select the Services heading on a separate page", async () => {
     const result = await retrieve("What services do you offer?", businessRepository(db, A), { topK: 1 });
-    expect(result.chunks.some(chunk => chunk.pageUrl === "https://bright-salon.test/")).toBe(true);
+    expect(result.chunks.some(chunk => chunk.heading === "Services" && chunk.pageUrl === "https://bright-salon.test/services.html")).toBe(true);
   });
   it("picks keyword rules only for the matching kind of question", () => {
     expect(factPatterns("Are there any special deals?")).toHaveLength(1);

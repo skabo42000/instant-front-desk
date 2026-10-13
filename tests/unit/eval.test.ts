@@ -100,3 +100,20 @@ it("judge sees the section a question was written from, once, next to the search
   expect(seen).toHaveLength(1);
   expect(seen[0].filter(chunkId=>chunkId===CHUNK)).toHaveLength(1);
 });
+it("answer fallback and judge both receive contact sections outside normal question evidence", async () => {
+  const repo = businessRepository(db, A), embeddings = new FakeEmbeddings(), contactId = id(906);
+  await repo.createChunk({ id: contactId, pageId: PAGE, ordinal: 1, heading: "Contact us", text: "Email help@fixture.invalid.", embedding: await embeddings.embed("Email help@fixture.invalid."), embeddingModel: embeddings.model, contentHash: "contact" });
+  const seen: string[][] = [];
+  const report = await runEvaluation(db, A, version, { crawlRunId: RUN,
+    judge: { provider: "fake", model: "contact-spy", family: "fake-judge", judge: async (_q, _answer, evidence) => {
+      seen.push(evidence.map(chunk => chunk.id));
+      return { pass: true, reason: "Fixture pipeline only" };
+    } },
+  });
+  const vip = report.results.find(result => result.question.kind === "price-not-listed")!;
+  expect(vip.answer?.text).toContain("help@fixture.invalid");
+  expect(vip.answer?.citations).toEqual([{ id: contactId, heading: "Contact us", pageUrl: "https://fixture.invalid" }]);
+  expect(report.results.find(result => result.question.kind === "source")?.error).toBe("ANSWER_EXECUTION_ERROR");
+  expect(seen).toHaveLength(6);
+  expect(seen.every(ids => ids.filter(found => found === contactId).length === 1)).toBe(true);
+});

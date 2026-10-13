@@ -1,0 +1,15 @@
+[
+  { "heading": "Welcome", "text": "Welcome to Example Automation, a friendly local agency." },
+  { "heading": "About", "text": "We work online and explain our work in plain English." },
+  { "heading": "What we do", "text": "Our services are AI receptionist, website chat assistant, custom websites and business automation." },
+  { "heading": "What it does", "text": "The receptionist answers missed calls, greets callers and passes details to the owner. Appointment booking is available only after activation." },
+  { "heading": "Talk", "text": "Book a free strategy call to discuss your business." },
+  { "heading": "Plan", "text": "We agree on a focused plan that fits your needs." },
+  { "heading": "Build", "text": "We build and test together before going live in weeks, not months." },
+  { "heading": "Improve", "text": "We review the results and improve the setup." },
+  { "heading": "Questions", "text": "You do not need technical skills. We set things up for you." },
+  { "heading": "How we use it", "text": "We do not sell your information or use it for ads." },
+  { "heading": "Your choices", "text": "You may request deletion of your data by email." },
+  { "heading": "Questions", "text": "Cost depends on your automation needs. We find a plan that fits your budget after a free strategy call." },
+  { "heading": "Contact us", "text": "Email help@example.test or call (202) 555-0199." }
+]

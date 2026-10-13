@@ -3,6 +3,7 @@ import type { RetrievedChunk } from "./answer";
 import type { businessRepository } from "./db/repository";
 import { EMBEDDING_DIMENSIONS } from "./db/client";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
+import { headingPatterns } from "./question-intents";
 
 export type Repository = ReturnType<typeof businessRepository>;
 export interface GroundedContact { kind: "phone" | "email"; value: string; pageUrl: string }
@@ -28,9 +29,15 @@ export interface RetrievalResult {
   status: "evidence" | "insufficient evidence";
   chunks: RetrievedChunk[];
   contacts: GroundedContact[];
+  contactChunks: RetrievedChunk[];
 }
 // Question words -> Postgres regex (case-insensitive) for the section that usually holds that fact.
 const FACTS: [RegExp, string][] = [
+  [/technical|tech.{0,12}skills|coding|programming/i, "no (technical|tech|coding)|technical skills|tech.skills|don't need.*(skills|technical)|do not need.*(skills|technical)"],
+  [/delet|eras|remove.{0,20}(data|information)/i, "delet|eras|your choices"],
+  [/sell|sold|selling/i, "sell|sold|selling|how we use"],
+  [/pric(?:e|es|ing)|cost|charge|\bfees?\b/i, "pric(e|es|ing)|cost|budget|free strategy call"],
+  [/launch|go live|goes live|how long|timing/i, "weeks|months|go live|goes live|launch"],
   [/phone|number|call|contact|reach/i, "\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}"],
   [/email/i, "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}"],
   [/address|located|location|where (?:is|are)|directions/i,
@@ -45,8 +52,6 @@ const FACTS: [RegExp, string][] = [
 export function factPatterns(question: string): string[] {
   return FACTS.filter(([words]) => words.test(question)).map(([, pattern]) => pattern);
 }
-// "What services do you offer?" is best answered by the homepage's opening section (its summary line).
-const OVERVIEW = /\b(?:what|which)\s+(?:services|treatments)\b|\bservices\s+(?:do|does)\b|\bwhat\s+(?:do|does)\s+.{0,40}\b(?:offer|do)\b/i;
 export async function retrieve(question: string, repo: Repository,
   options: { adapter?: EmbeddingAdapter; topK?: number; maxDistance?: number } = {},
 ): Promise<RetrievalResult> {
@@ -58,18 +63,23 @@ export async function retrieve(question: string, repo: Repository,
   const maxDistance = options.maxDistance ?? 1.25;
   if (!Number.isFinite(maxDistance) || maxDistance < 0) throw new Error("Invalid distance threshold");
   const contacts = extractContacts(await repo.listPageTexts());
+  // Separate fallback evidence prevents contact sections from crowding out answer sections.
+  const contactChunks = (await repo.searchChunksByPattern(
+    "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}|\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}", adapter.model, 3,
+  )).map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
   const embedding = await adapter.embed(question);
   if (embedding.length !== adapter.dimensions || !embedding.every(Number.isFinite)) throw new Error("Invalid embedding dimension/values");
   const hits = question.trim() && embedding.some(value => value !== 0)
     ? await repo.searchChunks(embedding, adapter.model, topK) : [];
-  // Hybrid search: contact-type questions (phone, address, hours, parking, booking) also get up to
-  // three sections found by keyword, because meaning-based search often ranks those sections low.
+  // Heading matches keep explicit lists and ordered steps together; keyword facts supplement vectors.
   const keywordHits = [];
-  if (question.trim() && OVERVIEW.test(question)) keywordHits.push(...await repo.homeSummaryChunk(adapter.model));
+  const headingHits = [];
+  if (question.trim()) for (const pattern of headingPatterns(question)) headingHits.push(...await repo.searchChunksByHeading(pattern, adapter.model));
   if (question.trim()) for (const pattern of factPatterns(question)) keywordHits.push(...await repo.searchChunksByPattern(pattern, adapter.model, 2));
   const seen = new Set<string>();
   const unique = <T extends { id: string }>(hit: T) => !seen.has(hit.id) && !!seen.add(hit.id);
-  const chunks = [...hits.filter(hit => hit.distance <= maxDistance).filter(unique), ...keywordHits.filter(unique).slice(0, 3)]
+  const chunks = [...headingHits.filter(unique).slice(0, 8), ...keywordHits.filter(unique).slice(0, 6),
+    ...hits.filter(hit => hit.distance <= maxDistance).filter(unique)]
     .map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
-  return { status: chunks.length ? "evidence" : "insufficient evidence", chunks, contacts };
+  return { status: chunks.length ? "evidence" : "insufficient evidence", chunks, contacts, contactChunks };
 }

@@ -4,11 +4,36 @@ import { GeminiAnswer, GeminiEmbeddings, GeminiQuestions, GroqAnswer, GroqJudge,
 import { ModelGateway } from "../../src/lib/models/gateway";
 import { FakeModel } from "../../src/lib/models/fake";
 import type { ModelRequest } from "../../src/lib/types";
+import reviewFixtures from "../fixtures/review-fixes.json";
 const KEY="synthetic-eval-key-marker";
 const request:ModelRequest={businessId:"fixture",question:"Haircuts?",systemInstruction:"Use excerpts only.",sources:[{businessId:"fixture",id:"chunk",pageUrl:"https://fixture.invalid",heading:"Haircuts",text:"Haircuts available."}]};
 const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status});
 const gemini=(value:unknown)=>({candidates:[{content:{parts:[{text:JSON.stringify(value)}]}}],usageMetadata:{promptTokenCount:10,candidatesTokenCount:4}});
 const groq=(value:unknown)=>({choices:[{message:{content:JSON.stringify(value)}}]});
+it.each([
+  ["What are the receptionist benefits?", "Answers missed calls and passes details to the owner.", 3],
+  ["List all your services", "AI receptionist, website chat, websites and automation.", 2],
+  ["Describe the process", "Talk, plan, build/test, improve.", 6],
+  ["What is the unlisted VIP price?", "Not found; email help@example.test.", 12],
+])("judge receives summary, completeness, conditional and contact rules with fixture evidence: %s", async (question, answerText, index) => {
+  const transport = vi.fn(async () => json(groq({ pass: true, reason: "Scripted serialization fixture" })));
+  const fixture = { ...reviewFixtures[index], id: "fixture", pageUrl: "https://example.test/" };
+  const judge = new GroqJudge(KEY, transport);
+  await judge.judge({ id: "q", kind: index === 12 ? "price-not-listed" : "source", question, expectedBehavior: "Answer with evidence; offer contact when refusing.", evidenceChunkIds: [fixture.id], validationErrors: [] },
+    { kind: index === 12 ? "refusal" : "answer", text: answerText, citations: [fixture], logs: [] }, [fixture]);
+  const body = JSON.parse(String((transport.mock.calls as unknown as [string, RequestInit][])[0][1].body));
+  expect(body.messages[0].content).toContain("accept a supported useful summary");
+  expect(body.messages[0].content).toContain("require the essential requested items or steps");
+  expect(body.messages[0].content).toContain("booking only after activation");
+  expect(body.messages[0].content).toContain("require a grounded contact offer");
+  expect(JSON.parse(body.messages[1].content).evidence).toEqual([{ id: "fixture", heading: fixture.heading, text: fixture.text }]);
+});
+it("question generation asks to preserve conditional features in expected answers", async () => {
+  const transport = vi.fn(async () => json(gemini([])));
+  await new GeminiQuestions(KEY, transport).generate([]);
+  const body = JSON.parse(String((transport.mock.calls as unknown as [string, RequestInit][])[0][1].body));
+  expect(body.systemInstruction.parts[0].text).toContain("booking only after activation");
+});
 it("Gemini answers/questions/embeddings and Groq fallback/judge serialize correctly over fake HTTP",async()=>{
   const calls:{url:string;init:RequestInit}[]=[];
   const transport:HttpTransport=async(url,init)=>{

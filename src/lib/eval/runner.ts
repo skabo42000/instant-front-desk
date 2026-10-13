@@ -11,7 +11,7 @@ import type { EmbeddingAdapter } from "../models/embeddings";
 import { questionRepository, type Question } from "./questions";
 import { outputPath } from "../output-path";
 
-export const JUDGE_PROMPT_VERSION = "grounding-judge-v3";
+export const JUDGE_PROMPT_VERSION = "grounding-judge-v4";
 export interface Verdict { pass: boolean; reason: string }
 export interface Judge extends JudgeConfig {
   judge(question: Question, result: AnswerResult, evidence: readonly RetrievedChunk[]): Promise<Verdict>;
@@ -75,8 +75,9 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
     if (options.stopReason?.()) entry.error = options.stopReason()!;
     else if (stopped) entry.error = "FREE_TIER_STOPPED";
     else try {
-      const evidence = (await retrieve(question.question, repo, { adapter: options.embeddings })).chunks;
-      entry.answer = await (options.answerQuestion ?? ((q, chunks) => answer(q, chunks, options.gateway)))(question.question, evidence);
+      const retrieved = await retrieve(question.question, repo, { adapter: options.embeddings });
+      const evidence = retrieved.chunks;
+      entry.answer = await (options.answerQuestion ?? ((q, chunks) => answer(q, chunks, options.gateway, retrieved.contactChunks)))(question.question, evidence);
       const logs = entry.answer.logs;
       if (options.stopReason?.()) entry.error = options.stopReason()!;
       else if (logs.some(log => log.errorCode === "FREE_TIER_EXHAUSTED")) {
@@ -91,7 +92,9 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
         const reference = (await Promise.all(question.evidenceChunkIds.map(id => repo.getChunk(id))))
           .filter(chunk => chunk !== null && !evidence.some(found => found.id === chunk.id))
           .map(chunk => ({ id: chunk!.id, pageUrl: chunk!.pageUrl, heading: chunk!.heading, text: chunk!.text }));
-        const verdict = await options.judge.judge(question, entry.answer, [...evidence, ...reference]);
+        const judgeEvidence = [...new Map([...evidence, ...reference, ...retrieved.contactChunks]
+          .map(chunk => [chunk.id, chunk])).values()];
+        const verdict = await options.judge.judge(question, entry.answer, judgeEvidence);
         if (typeof verdict.pass !== "boolean" || typeof verdict.reason !== "string" || !verdict.reason.trim() || verdict.reason.length > 4000) {
           throw new Error("Malformed judge reply");
         }
