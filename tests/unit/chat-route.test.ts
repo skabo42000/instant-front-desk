@@ -77,10 +77,10 @@ describe("offline chat endpoint", () => {
     expect(failure.status).toBe(503);
     expect(await failure.text()).not.toContain("synthetic-secret-marker");
   });
-  it("expires limits without keeping questions", () => {
+  it("expires limits without keeping questions", async () => {
     const limiter = new ChatRateLimiter(1, 1, 100);
-    expect(limiter.take("a", "b", 0)).toBe(true);
-    expect(limiter.take("a", "b", 99)).toBe(false);
-    expect(limiter.take("a", "b", 100)).toBe(true);
+    expect(await limiter.take("a", "b", 0)).toBe(true);
+    expect(await limiter.take("a", "b", 99)).toBe(false);
+    expect(await limiter.take("a", "b", 100)).toBe(true);
   });
 });

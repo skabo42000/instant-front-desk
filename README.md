@@ -88,9 +88,12 @@ In-memory limits allow 10 requests per client and 60 per business per minute;
 one server process, with expired entries removed and a bounded map. A client is
 identified by an HttpOnly, SameSite cookie, not untrusted forwarded IP headers.
 Clearing/changing cookies bypasses the client bucket; the business bucket remains.
-These are local prototype limits: **before deployment**, use a shared limiter across
-processes and a trusted client identity at the hosting boundary. Process restarts
-reset limits. No deployment is authorized by this milestone.
+Counters now live behind a small `RateLimitStore` interface (`src/lib/rate-limit-store.ts`).
+Only the in-memory store exists; `RATE_LIMIT_STORE` (default `memory`) selects it and
+unknown values fall back to memory with a warning. A `FallbackRateLimitStore` wrapper is
+ready for a future shared store. **Still open before deployment:** a shared store across
+processes (not built yet; see the pull request for options) and a trusted client identity
+at the hosting boundary. Process restarts reset limits. No deployment is authorized.
 
 ## Settings and offline checks
 
