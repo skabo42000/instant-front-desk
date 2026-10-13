@@ -38,10 +38,15 @@ const FACTS: [RegExp, string][] = [
   [/hours|open|clos/i, "\\m\\d{1,2}(:\\d{2})?\\s*(am|pm|a\\.m\\.|p\\.m\\.)"],
   [/parking|\bpark\b/i, "parking"],
   [/book|appointment|schedul|reserv/i, "booking|appointment|schedul"],
+  [/deal|discount|special|promo|coupon/i, "\\mdeals?\\M|discount|special|promo|\\d+\\s*%\\s*off"],
+  [/\bwhen\b.*\b(?:updated|changed|revised|effective)\b|\blast (?:updated|changed)\b/i,
+    "last updated|updated:|effective( date)?:|\\m(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{1,2},?\\s+\\d{4}"],
 ];
 export function factPatterns(question: string): string[] {
   return FACTS.filter(([words]) => words.test(question)).map(([, pattern]) => pattern);
 }
+// "What services do you offer?" is best answered by the homepage's opening section (its summary line).
+const OVERVIEW = /\b(?:what|which)\s+(?:services|treatments)\b|\bservices\s+(?:do|does)\b|\bwhat\s+(?:do|does)\s+.{0,40}\b(?:offer|do)\b/i;
 export async function retrieve(question: string, repo: Repository,
   options: { adapter?: EmbeddingAdapter; topK?: number; maxDistance?: number } = {},
 ): Promise<RetrievalResult> {
@@ -60,6 +65,7 @@ export async function retrieve(question: string, repo: Repository,
   // Hybrid search: contact-type questions (phone, address, hours, parking, booking) also get up to
   // three sections found by keyword, because meaning-based search often ranks those sections low.
   const keywordHits = [];
+  if (question.trim() && OVERVIEW.test(question)) keywordHits.push(...await repo.homeSummaryChunk(adapter.model));
   if (question.trim()) for (const pattern of factPatterns(question)) keywordHits.push(...await repo.searchChunksByPattern(pattern, adapter.model, 2));
   const seen = new Set<string>();
   const unique = <T extends { id: string }>(hit: T) => !seen.has(hit.id) && !!seen.add(hit.id);

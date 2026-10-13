@@ -109,14 +109,23 @@ export function businessRepository(db: PGlite, businessId: string) {
       return result.rows;
     },
     // Keyword search (Postgres case-insensitive regex) for facts that meaning-based search often misses.
+    // Sections that mention the keyword most often come first.
     async searchChunksByPattern(pattern: string, embeddingModel: string, limit = 3): Promise<SearchHit[]> {
       if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Limit must be 1 to 20");
       const result = await db.query<SearchHit>(`SELECT c.business_id AS "businessId", c.id,
         p.url AS "pageUrl", c.heading, c.text, 0 AS distance
         FROM chunks c JOIN pages p ON p.business_id = c.business_id AND p.id = c.page_id
         WHERE c.business_id = $1 AND c.embedding_model = $3 AND (c.heading || ' ' || c.text) ~* $2
-        ORDER BY length(c.text), c.id LIMIT $4`, [businessId, pattern, embeddingModel, limit]);
+        ORDER BY regexp_count(c.heading || ' ' || c.text, $2, 1, 'i') DESC, length(c.text), c.id LIMIT $4`, [businessId, pattern, embeddingModel, limit]);
       return result.rows;
+    },
+    // The first two sections of the shortest-URL page (the homepage): its intro and summary line.
+    async homeSummaryChunk(embeddingModel: string): Promise<SearchHit[]> {
+      return (await db.query<SearchHit>(`SELECT c.business_id AS "businessId", c.id,
+        p.url AS "pageUrl", c.heading, c.text, 0 AS distance
+        FROM chunks c JOIN pages p ON p.business_id = c.business_id AND p.id = c.page_id
+        WHERE c.business_id = $1 AND c.embedding_model = $2
+        ORDER BY length(p.url), c.ordinal, c.id LIMIT 2`, [businessId, embeddingModel])).rows;
     },
     async listPageTexts(): Promise<{ pageUrl: string; text: string }[]> {
       return (await db.query<{ pageUrl: string; text: string }>(

@@ -4,7 +4,7 @@ import { openDatabase } from "../../src/lib/db/client";
 import { businessRepository } from "../../src/lib/db/repository";
 import { ingest } from "../../src/lib/ingest";
 import { FakeEmbeddings } from "../../src/lib/models/embeddings";
-import { extractContacts, retrieve } from "../../src/lib/retrieve";
+import { extractContacts, factPatterns, retrieve } from "../../src/lib/retrieve";
 import { answer } from "../../src/lib/answer";
 import { fixtureCrawl } from "../helpers/fixture-crawl";
 const A = "00000000-0000-0000-0000-000000000001";
@@ -37,6 +37,16 @@ describe("offline retrieval", () => {
       expect(result.chunks.some(chunk => chunk.text.includes(phone))).toBe(true);
       expect(result.chunks.every(chunk => chunk.pageUrl === `https://${site}.test/`)).toBe(true);
     }
+  });
+  it("overview questions include the homepage's opening section", async () => {
+    const result = await retrieve("What services do you offer?", businessRepository(db, A), { topK: 1 });
+    expect(result.chunks.some(chunk => chunk.pageUrl === "https://bright-salon.test/")).toBe(true);
+  });
+  it("picks keyword rules only for the matching kind of question", () => {
+    expect(factPatterns("Are there any special deals?")).toHaveLength(1);
+    expect(factPatterns("When was the privacy policy last updated?")).toHaveLength(1);
+    expect(factPatterns("When are you open?").some(pattern => pattern.includes("last updated"))).toBe(false);
+    expect(factPatterns("What are nano brows?")).toEqual([]);
   });
   it("irrelevant and empty queries return insufficient evidence and skip answer generation", async () => {
     for (const question of ["quantum spaceship astronomy", "", "the and of"]) {

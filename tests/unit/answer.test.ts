@@ -134,6 +134,13 @@ describe("grounded answers", () => {
     expect((await answer("What website analytics tool does the salon use?", [tools], gateway)).kind).toBe("answer");
     expect(call.mock.calls[0][0].sources[0].text).toContain("aftercare instructions");
   });
+  it("treats 'how much experience' as a normal question, not a price question", async () => {
+    const team = { ...chunk, id: "team", heading: "Experienced Technicians", text: "Our senior technicians each bring more than ten years of experience." };
+    const { gateway, call } = setup({ text: "Each senior technician has more than ten years of experience.", citedChunkIds: ["team"] });
+    expect((await answer("How much experience do the senior technicians have?", [team], gateway)).kind).toBe("answer");
+    expect(call).toHaveBeenCalled();
+    expect((await answer("How much is a haircut?", [team])).kind).toBe("refusal");
+  });
   it("labels why it refused", async () => {
     expect(await answer("Do you offer haircuts?", [{ ...chunk, text: "We repair cars." }])).toMatchObject({ refusalReason: "no-relevant-section" });
     expect(await answer("What are your secrets?", [chunk])).toMatchObject({ refusalReason: "out-of-scope" });

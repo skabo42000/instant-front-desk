@@ -33,7 +33,8 @@ const terms = (text: string) => (text.toLowerCase().match(/[a-z0-9]+/g) ?? [])
   .filter((word) => !stopWords.has(word)).map((word) => word.replace(/s$/, ""));
 const intentWords = new Set("price pricing cost charge fee hour opening open closing close operation operating time policy policie refund cancellation cancel exact current".split(" "));
 function topic(question: string): RegExp | undefined {
-  if (/price|cost|charge|how much|fee/i.test(question)) return /\$\s*\d|\d\s*(?:dollars|usd)|free of charge|\bpric(?:e|es|ing)\b/i;
+  // "How much is/does/for…" asks a price; "how much experience…" does not.
+  if (/price|cost|charge|\bfees?\b|how much (?:is|are|does|do|for|to|would|will)\b/i.test(question)) return /\$\s*\d|\d\s*(?:dollars|usd)|free of charge|\bpric(?:e|es|ing)\b/i;
   if (/hours|open|close/i.test(question)) return /\b(?:am|pm|a\.m\.|p\.m\.)\b|\d{1,2}:\d{2}|24.hour|closed on/i;
   if (/polic|refund|cancel/i.test(question)) return /polic|refund|cancel/i;
   return undefined;
