@@ -13,8 +13,11 @@ import { runEvaluation, scoreReport, type Judge } from "../src/lib/eval/runner";
 import { evaluationProviders, type HttpTransport } from "../src/lib/models/providers";
 import { assertIndependentJudge, ModelGateway } from "../src/lib/models/gateway";
 import { outputPath } from "../src/lib/output-path";
+import type { EmbeddingAdapter } from "../src/lib/models/embeddings";
 
 const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--pause-ms N] [--approve-generated]";
+// Stays under the inferred Gemini embedding limit of 100 per minute, with margin.
+const EMBEDDINGS_PER_MINUTE = 80;
 const KEY_NAMES = ["GEMINI_EVAL_API_KEY", "GROQ_EVAL_API_KEY"] as const;
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -100,7 +103,25 @@ export interface LimitDetail {
   kind: "tokens" | "requests" | "unknown";
   retryAfterSeconds: number | null;
 }
-const describeLimit = (detail: LimitDetail | null) => detail
+// Embedding calls (one per chunk at ingest, one per question) arrive in a burst. The 2026-10-12
+// synqlogic.com run failed on Gemini embedding call 100 inside a minute (limit inferred, not
+// documented here), so wait before a call that would exceed perMinute in any rolling 60 s window.
+// The wait happens before the adapter starts its own timeout.
+export function pacedEmbeddings(adapter: EmbeddingAdapter, perMinute: number, sleep: (ms: number) => Promise<void>,
+  now: () => number = Date.now): EmbeddingAdapter {
+  const recent: number[] = [];
+  const expire = () => { while (recent.length && now() - recent[0] >= 60_000) recent.shift(); };
+  return {
+    model: adapter.model, dimensions: adapter.dimensions,
+    async embed(text: string) {
+      expire();
+      if (recent.length >= perMinute) { await sleep(recent[0] + 60_000 - now() + 1000); expire(); }
+      recent.push(now());
+      return adapter.embed(text);
+    },
+  };
+}
+const describeLimit =(detail: LimitDetail | null) => detail
   ? `free-tier limit reached: ${detail.service}, ${detail.window}, ${detail.kind}${detail.retryAfterSeconds !== null ? `, retry after ${detail.retryAfterSeconds}s` : ""}`
   : "free-tier limit reached";
 export interface LiveDependencies {
@@ -147,13 +168,14 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const providers = evaluationProviders(settings, budget.transport);
     const judge = dependencies.judge ?? providers.judge;
     assertIndependentJudge(providers.answer.family, judge);
+    const embeddings = pacedEmbeddings(providers.embeddings, EMBEDDINGS_PER_MINUTE, sleep);
     db = dependencies.db ?? await openDatabase(resolve("data/instant-front-desk"));
     // Separate real vector space from businesses previously created with fake embeddings.
     const businessId = stableId(`${url.origin}|${providers.embeddings.model}`);
     const repo = businessRepository(db, businessId);
     if (!await repo.getBusiness()) await repo.createBusiness({ slug: `live-${businessId}`, name: url.hostname,
       sourceUrl: url.origin, phone: null, contactUrl: null, embeddingModel: providers.embeddings.model });
-    const snapshot = await ingest(url.href, repo, { adapter: providers.embeddings, crawlOptions: {
+    const snapshot = await ingest(url.href, repo, { adapter: embeddings, crawlOptions: {
       ...dependencies.crawlOptions,
       transport: async request => {
         if (budget.stopReason()) throw new Error("Live run stopped");
@@ -181,7 +203,7 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model,
       family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: 5000, totalTimeoutMs: 5000 });
     const report = await runEvaluation(db, businessId, approved.version, { crawlRunId: crawlRun.id, judge, gateway,
-      embeddings: providers.embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
+      embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
       sanitizeResult: entry => JSON.parse(redact(JSON.stringify(entry), keys)) });
     const score = scoreReport(report);
     await mkdir(outputPath("reports/private"), { recursive: true });

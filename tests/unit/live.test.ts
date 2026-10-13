@@ -3,7 +3,7 @@ import { outputPath } from "../../src/lib/output-path";
 import { readFile } from "node:fs/promises";
 import type { PGlite } from "@electric-sql/pglite";
 import { openDatabase } from "../../src/lib/db/client";
-import { evalKeysFromFile, guardedTransport, main } from "../../scripts/live";
+import { evalKeysFromFile, guardedTransport, main, pacedEmbeddings } from "../../scripts/live";
 import { latestReport } from "../../src/lib/eval/runner";
 import { questionRepository } from "../../src/lib/eval/questions";
 import { stableId } from "../../src/lib/chunk";
@@ -124,4 +124,16 @@ it("transport deadlines and raw exceptions never expose keys and exhausted caps 
   expect(blocked).toHaveBeenCalledTimes(1);
   const timeout = guardedTransport(async () => new Promise(() => {}), 120, [GEMINI], 5);
   await expect(timeout.transport("https://fixture.invalid", {})).rejects.toThrow("PROVIDER_REQUEST_FAILED");
+});
+it("paced embeddings wait before a call that would pass the per-minute cap, then continue", async () => {
+  let clock = 0;
+  const waits: number[] = [];
+  const inner = { model: "m", dimensions: 3, embed: vi.fn(async () => [0, 0, 1]) };
+  const paced = pacedEmbeddings(inner, 3, async ms => { waits.push(ms); clock += ms; }, () => clock);
+  for (let i = 0; i < 3; i++) { await paced.embed("x"); clock += 1000; }
+  expect(waits).toEqual([]);
+  await paced.embed("x");
+  expect(waits).toEqual([58_000]);
+  expect(inner.embed).toHaveBeenCalledTimes(4);
+  expect(paced.model).toBe("m"); expect(paced.dimensions).toBe(3);
 });
