@@ -14,7 +14,10 @@ export async function ingest(url: string, repo: Repository,
   if (new URL(url).origin !== new URL(business.sourceUrl).origin) throw new Error("Business source origin mismatch");
   const result = await crawl(url, options.crawlOptions);
   // Partial crawls do not silently replace a previously complete snapshot.
-  if (result.status !== "completed" || result.errors.length || !result.pages.length) throw new Error("Crawl incomplete; ingestion not stored");
+  if (result.status !== "completed" || result.errors.length || !result.pages.length) {
+    const first = result.errors[0];
+    throw new Error(`Crawl incomplete (${result.status}, ${result.pages.length} pages, ${result.errors.length} errors${first ? `; first: ${first.url} ${first.message}` : ""}); ingestion not stored`);
+  }
   const pages = [];
   for (const page of result.pages) {
     const pageId = stableId(page.url);

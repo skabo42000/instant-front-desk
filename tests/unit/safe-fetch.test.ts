@@ -152,6 +152,13 @@ describe("pinned transport and redirects", () => {
     expect(dns).not.toHaveBeenCalled();
     expect(transport).toHaveBeenCalledWith(expect.objectContaining({ address: { address: "2606:4700:4700::1111", family: 6 } }));
   });
+
+  it("prefers a validated IPv4 address when DNS lists IPv6 first", async () => {
+    const transport = vi.fn<Transport>().mockResolvedValue(response());
+    await safeFetch("https://example.test", { transport,
+      dns: async () => [{ address: "2606:4700:4700::1111", family: 6 }, { address: "93.184.216.34", family: 4 }] });
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ address: { address: "93.184.216.34", family: 4 } }));
+  });
 });
 
 describe("resource limits", () => {

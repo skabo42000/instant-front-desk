@@ -88,7 +88,9 @@ export async function safeFetch(input: string | URL, options: SafeFetchOptions =
       for (const address of addresses) {
         if (assertPublicAddress(address.address) !== address.family) throw new Error("DNS address family mismatch.");
       }
-      activeResponse = await transport({ url, address: { ...addresses[0] }, signal: controller.signal });
+      // Prefer IPv4: many home networks list IPv6 first but cannot connect over it (seen 2026-10-12).
+      const chosen = addresses.find(address => address.family === 4) ?? addresses[0];
+      activeResponse = await transport({ url, address: { ...chosen }, signal: controller.signal });
       if (controller.signal.aborted) {
         activeResponse.destroy();
         throw new Error("Fetch deadline exceeded.");

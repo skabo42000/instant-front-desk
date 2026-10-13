@@ -195,6 +195,8 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code
       : error instanceof Error && /^[A-Z_]{3,40}$/.test(error.message) ? error.message : "UNKNOWN";
     print(budget.stopReason() === "FREE_TIER_EXHAUSTED" ? describeLimit(budget.limitDetail()) : budget.stopReason() === "REQUEST_CAP_REACHED" ? "request cap reached" : `Live execution failed (${/^[A-Z_]{3,40}$/.test(code) ? code : "UNKNOWN"}); no successful evaluation completed.`);
+    // Local debugging only: the message is printed with both keys redacted, never saved to a report.
+    if (env.LIVE_DEBUG === "yes" && error instanceof Error) print(`debug: ${error.name}: ${error.message.slice(0, 300)}`);
     process.exitCode = 1;
   } finally {
     print(`calls used: ${budget.callsUsed()}`);
