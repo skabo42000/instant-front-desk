@@ -193,7 +193,7 @@ export class GroqJudge extends GroqAnswer implements Judge {
     return { pass: data.pass, reason: data.reason };
   }
 }
-export function evaluationProviders(env: Readonly<Record<string, string | undefined>>, transport: HttpTransport) {
+export function evaluationProviders(env: Readonly<Record<string, string | undefined>>, transport: HttpTransport, timeoutMs?: number) {
   // Access only isolated evaluation keys, never the existing widget configuration.
   const geminiKey = env.GEMINI_EVAL_API_KEY ?? "";
   const groqKey = env.GROQ_EVAL_API_KEY ?? "";
@@ -201,7 +201,7 @@ export function evaluationProviders(env: Readonly<Record<string, string | undefi
   const questionModel = env.GEMINI_QUESTION_MODEL ?? answerModel;
   const groqModel = env.GROQ_MODEL ?? GROQ_MODEL;
   // Writing 20 questions from a whole site and judging with evidence take longer than one chat answer.
-  return { embeddings: new GeminiEmbeddings(geminiKey, transport), questions: new GeminiQuestions(geminiKey, transport, questionModel, 30000),
-    answer: new GeminiAnswer(geminiKey, transport, answerModel), fallback: new GroqAnswer(groqKey, transport, groqModel),
-    judge: new GroqJudge(groqKey, transport, groqModel, 15000) };
+  return { embeddings: new GeminiEmbeddings(geminiKey, transport, "gemini-embedding-001", timeoutMs), questions: new GeminiQuestions(geminiKey, transport, questionModel, timeoutMs ?? 30000),
+    answer: new GeminiAnswer(geminiKey, transport, answerModel, timeoutMs), fallback: new GroqAnswer(groqKey, transport, groqModel, timeoutMs),
+    judge: new GroqJudge(groqKey, transport, groqModel, timeoutMs ?? 15000) };
 }

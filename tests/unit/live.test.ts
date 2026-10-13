@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { outputPath } from "../../src/lib/output-path";
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import type { PGlite } from "@electric-sql/pglite";
 import { openDatabase } from "../../src/lib/db/client";
 import { evalKeysFromFile, guardedTransport, main, pacedEmbeddings } from "../../scripts/live";
@@ -42,7 +43,7 @@ function fixture(name: string, options: { quotaAt?: number; status?: number; ech
     transport: vi.fn(async ({ url: pageUrl }: { url: URL }) => ({ status: 200,
       headers: { "content-type": pageUrl.pathname === "/robots.txt" ? "text/plain" : "text/html" },
       body: (async function* () { yield Buffer.from(pageUrl.pathname === "/robots.txt" ? "User-agent: *\nAllow: /" : "<html><h1>Haircuts</h1><p>Haircuts available.</p></html>"); })(), destroy() {} })) };
-  return { url, output, transport, dependencies: { env, db, transport, crawlOptions, readEnv: async () => "", output: (line: string) => output.push(line), sleep: async () => {} },
+  return { url, output, transport, dependencies: { env, db, transport, crawlOptions, embeddingCacheDirectory: outputPath("data/embedding-cache", randomUUID()), readEnv: async () => "", output: (line: string) => output.push(line), sleep: async () => {} },
     businessId: stableId(`${new URL(url).origin}|gemini-embedding-001`) };
 }
 it("refuses without LIVE_OK before env-file access or any transport", async () => {
@@ -136,4 +137,48 @@ it("paced embeddings wait before a call that would pass the per-minute cap, then
   expect(waits).toEqual([58_000]);
   expect(inner.embed).toHaveBeenCalledTimes(4);
   expect(paced.model).toBe("m"); expect(paced.dimensions).toBe(3);
+});
+
+it("timeout retried once then succeeds, with backoff and failure kind/model", async () => {
+  const transport = vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValueOnce(json({ ok: true }));
+  const sleep = vi.fn(async () => {});
+  const budget = guardedTransport(transport, 2, [], 5, sleep);
+  const response = await budget.transport("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent", {});
+  expect(response.ok).toBe(true);
+  expect(transport).toHaveBeenCalledTimes(2);
+  expect(budget.callsUsed()).toBe(2);
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(1000);
+  expect(budget.lastFailure()).toBe("gemini call #1 generation model gemini-3.5-flash-lite timeout after 5 ms");
+});
+
+it("retries 5xx once, but never 429, quota, 4xx or arbitrary exceptions", async () => {
+  for (const [status, body, attempts] of [[503, {}, 2], [429, {}, 1], [503, { error: "quota exceeded" }, 1], [400, {}, 1]] as const) {
+    const transport = vi.fn(async () => json(body, status));
+    const sleep = vi.fn(async () => {});
+    const budget = guardedTransport(transport, 10, [], 5, sleep);
+    await budget.transport("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent", {}).catch(() => {});
+    expect(transport).toHaveBeenCalledTimes(attempts);
+    expect(budget.callsUsed()).toBe(attempts);
+    expect(sleep).toHaveBeenCalledTimes(attempts - 1);
+    expect(budget.lastFailure()).toContain("embedding model gemini-embedding-001");
+  }
+});
+
+it("retry cannot exceed the hard call cap", async () => {
+  const transport = vi.fn(async () => json({}, 503));
+  const budget = guardedTransport(transport, 1, [], 5, async () => {});
+  await expect(budget.transport("https://fixture.invalid", {})).rejects.toThrow("REQUEST_CAP_REACHED");
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(budget.callsUsed()).toBe(1);
+});
+
+it("second run with same chunks makes 0 embedding calls during ingestion", async () => {
+  const first = fixture("cache-reuse");
+  await main([first.url], first.dependencies);
+  expect(vi.mocked(first.transport).mock.calls.filter(([url]) => url.includes(":embedContent"))).toHaveLength(1);
+  const second = fixture("cache-reuse");
+  await main([second.url], { ...second.dependencies, embeddingCacheDirectory: first.dependencies.embeddingCacheDirectory });
+  expect(vi.mocked(second.transport).mock.calls.filter(([url]) => url.includes(":embedContent"))).toHaveLength(0);
+  expect(second.output).toContain("chunks: 1");
+  expect(second.output).toContain("questions: 7");
 });

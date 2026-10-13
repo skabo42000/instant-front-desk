@@ -14,6 +14,7 @@ import { evaluationProviders, type HttpTransport } from "../src/lib/models/provi
 import { assertIndependentJudge, ModelGateway } from "../src/lib/models/gateway";
 import { outputPath } from "../src/lib/output-path";
 import type { EmbeddingAdapter } from "../src/lib/models/embeddings";
+import { cachedEmbeddings } from "../src/lib/models/embedding-cache";
 
 const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--pause-ms N] [--approve-generated]";
 // Stays under the inferred Gemini embedding limit of 100 per minute, with margin.
@@ -36,7 +37,8 @@ export function redact(value: string, keys: readonly string[]): string {
   for (const key of keys) if (key) value = value.split(key).join("[redacted]");
   return value;
 }
-export function guardedTransport(transport: HttpTransport, maxCalls: number, keys: readonly string[], timeoutMs = 5000) {
+export function guardedTransport(transport: HttpTransport, maxCalls: number, keys: readonly string[], timeoutMs = 5000,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms))) {
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
   let calls = 0;
   let stop: string | null = null;
@@ -58,41 +60,70 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
     stop = "FREE_TIER_EXHAUSTED";
   };
   const guarded: HttpTransport = async (url, init) => {
-    if (stop) throw new Error(stop);
-    if (calls >= maxCalls) { stop = "REQUEST_CAP_REACHED"; throw new Error(stop); }
-    calls++;
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    init.signal?.addEventListener("abort", abort, { once: true });
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let model = "unknown";
+    let kind = "unknown";
     try {
-      if (init.signal?.aborted) throw new Error("REQUEST_TIMEOUT");
-      return await Promise.race([
-        (async () => {
-          const response = await transport(url, { ...init, signal: controller.signal, redirect: "error" });
-          const raw = await response.text();
-          if (!response.ok) lastFailure = `${hostLabel(url)} HTTP ${response.status}`;
-          if (response.status === 429) { recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!); }
-          let decoded: unknown;
-          try { decoded = JSON.parse(raw); } catch { /* Adapter rejects malformed JSON. */ }
-          const hasError = decoded && typeof decoded === "object" && "error" in decoded;
-          if ((!response.ok || hasError) && /quota|resource_exhausted|rate.?limit|free.?tier/i.test(raw)) {
-            recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!);
-          }
-          // Check both keys, including escaped JSON, before any model data is stored.
-          if (keys.some(key => key && (raw.includes(key) || JSON.stringify(decoded)?.includes(key)))) throw new Error("SENSITIVE_REPLY");
-          return new Response(raw, { status: response.status, headers: response.headers });
-        })(),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => { controller.abort(); reject(new Error("REQUEST_TIMEOUT")); }, timeoutMs);
-          controller.signal.addEventListener("abort", () => reject(new Error("REQUEST_TIMEOUT")), { once: true });
-        }),
-      ]);
-    } catch (error) {
-      if (error instanceof Error && error.message === "REQUEST_TIMEOUT") lastFailure = `${hostLabel(url)} timeout after ${timeoutMs} ms`;
-      throw new Error(stop ?? "PROVIDER_REQUEST_FAILED");
+      const endpoint = new URL(url).pathname;
+      const match = /\/models\/([a-zA-Z0-9._-]+):(embedContent|generateContent)$/.exec(endpoint);
+      if (match) { model = match[1]; kind = match[2] === "embedContent" ? "embedding" : "generation"; }
+      else if (endpoint.endsWith("/chat/completions")) {
+        kind = "generation";
+        const supplied = JSON.parse(String(init.body)).model;
+        if (typeof supplied === "string" && /^[a-zA-Z0-9/._-]{1,100}$/.test(supplied)) model = supplied;
+      }
+    } catch { /* Log fixed labels only for unknown requests. */ }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (stop) throw new Error(stop);
+      if (calls >= maxCalls) { stop = "REQUEST_CAP_REACHED"; throw new Error(stop); }
+      if (init.signal?.aborted) throw new Error("PROVIDER_REQUEST_FAILED");
+      calls++;
+      const call = calls;
+      const label = `${hostLabel(url)} call #${call} ${kind} model ${model}`;
+      let retryable = false;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      init.signal?.addEventListener("abort", abort, { once: true });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (init.signal?.aborted) throw new Error("REQUEST_TIMEOUT");
+        const response = await Promise.race([
+          (async () => {
+            const response = await transport(url, { ...init, signal: controller.signal, redirect: "error" });
+            const raw = await response.text();
+            if (!response.ok) lastFailure = `${label} HTTP ${response.status}`;
+            if (response.status === 429) { recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!); }
+            let decoded: unknown;
+            try { decoded = JSON.parse(raw); } catch { /* Adapter rejects malformed JSON. */ }
+            const hasError = decoded && typeof decoded === "object" && "error" in decoded;
+            if ((!response.ok || hasError) && /quota|resource_exhausted|rate.?limit|free.?tier/i.test(raw)) {
+              recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!);
+            }
+            // Check both keys, including escaped JSON, before any model data is stored.
+            if (keys.some(key => key && (raw.includes(key) || JSON.stringify(decoded)?.includes(key)))) throw new Error("SENSITIVE_REPLY");
+            if (response.status >= 500 && response.status <= 599) {
+              retryable = true;
+              throw new Error("RETRYABLE_HTTP_ERROR");
+            }
+            return new Response(raw, { status: response.status, headers: response.headers });
+          })(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => { controller.abort(); reject(new Error("REQUEST_TIMEOUT")); }, timeoutMs);
+            controller.signal.addEventListener("abort", () => reject(new Error("REQUEST_TIMEOUT")), { once: true });
+          }),
+        ]);
+        return response;
+      } catch (error) {
+        if (error instanceof Error && error.message === "REQUEST_TIMEOUT") {
+          lastFailure = `${label} timeout after ${timeoutMs} ms`;
+          retryable = !init.signal?.aborted;
+        }
+        if (stop || !retryable || attempt === 1) throw new Error(stop ?? "PROVIDER_REQUEST_FAILED");
+      }
+      finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
+      // Only transient failures get one retry; the next iteration checks and counts the budget.
+      await sleep(1000);
     }
-    finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
+    throw new Error("PROVIDER_REQUEST_FAILED");
   };
   return { transport: guarded, callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit, lastFailure: () => lastFailure,
     stopForQuota: () => { stop = "FREE_TIER_EXHAUSTED"; } };
@@ -133,6 +164,7 @@ export interface LiveDependencies {
   judge?: Judge;
   output?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
+  embeddingCacheDirectory?: string;
 }
 export async function main(args: readonly string[], dependencies: LiveDependencies = {}): Promise<void> {
   const env = dependencies.env ?? process.env;
@@ -160,12 +192,13 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
   const keys = KEY_NAMES.map(name => settings[name] ?? "");
   const print = (line: string) => (dependencies.output ?? console.log)(redact(line, keys));
   // Outer safety timeout per call; each model step also has its own, shorter limit.
-  const budget = guardedTransport(dependencies.transport ?? ((input, init) => fetch(input, init)), maxCalls, keys, 30000);
+  const budget = guardedTransport(dependencies.transport ?? ((input, init) => fetch(input, init)), maxCalls, keys, 30000, sleep);
   let db: PGlite | undefined;
   try {
     if (redact(url.href, keys) !== url.href) throw new Error("Sensitive URL");
     if (Object.values(settings).some(value => value && !keys.includes(value) && redact(value, keys) !== value)) throw new Error("Sensitive model setting");
-    const providers = evaluationProviders(settings, budget.transport);
+    // Two 30 s attempts plus backoff must fit inside the adapter and gateway deadlines.
+    const providers = evaluationProviders(settings, budget.transport, 65000);
     const judge = dependencies.judge ?? providers.judge;
     assertIndependentJudge(providers.answer.family, judge);
     const embeddings = pacedEmbeddings(providers.embeddings, EMBEDDINGS_PER_MINUTE, sleep);
@@ -175,7 +208,9 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const repo = businessRepository(db, businessId);
     if (!await repo.getBusiness()) await repo.createBusiness({ slug: `live-${businessId}`, name: url.hostname,
       sourceUrl: url.origin, phone: null, contactUrl: null, embeddingModel: providers.embeddings.model });
-    const snapshot = await ingest(url.href, repo, { adapter: embeddings, crawlOptions: {
+    const ingestionEmbeddings = cachedEmbeddings(embeddings,
+      dependencies.embeddingCacheDirectory ?? outputPath("data/embedding-cache"));
+    const snapshot = await ingest(url.href, repo, { adapter: ingestionEmbeddings, crawlOptions: {
       ...dependencies.crawlOptions,
       transport: async request => {
         if (budget.stopReason()) throw new Error("Live run stopped");
@@ -201,7 +236,7 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const approved = await questions.approveUnflagged(generated.version);
     const crawlRun = (await db.query<{ id: string }>("SELECT id FROM crawl_runs WHERE business_id=$1 AND status='completed' ORDER BY finished_at DESC LIMIT 1", [businessId])).rows[0];
     const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model,
-      family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: 5000, totalTimeoutMs: 5000 });
+      family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: 65000, totalTimeoutMs: 65000 });
     const report = await runEvaluation(db, businessId, approved.version, { crawlRunId: crawlRun.id, judge, gateway,
       embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
       sanitizeResult: entry => JSON.parse(redact(JSON.stringify(entry), keys)) });
