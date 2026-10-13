@@ -108,6 +108,16 @@ export function businessRepository(db: PGlite, businessId: string) {
         ORDER BY distance, c.id LIMIT $4`, [businessId, queryVector, embeddingModel, limit]);
       return result.rows;
     },
+    // Keyword search (Postgres case-insensitive regex) for facts that meaning-based search often misses.
+    async searchChunksByPattern(pattern: string, embeddingModel: string, limit = 3): Promise<SearchHit[]> {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Limit must be 1 to 20");
+      const result = await db.query<SearchHit>(`SELECT c.business_id AS "businessId", c.id,
+        p.url AS "pageUrl", c.heading, c.text, 0 AS distance
+        FROM chunks c JOIN pages p ON p.business_id = c.business_id AND p.id = c.page_id
+        WHERE c.business_id = $1 AND c.embedding_model = $3 AND (c.heading || ' ' || c.text) ~* $2
+        ORDER BY length(c.text), c.id LIMIT $4`, [businessId, pattern, embeddingModel, limit]);
+      return result.rows;
+    },
     async listPageTexts(): Promise<{ pageUrl: string; text: string }[]> {
       return (await db.query<{ pageUrl: string; text: string }>(
         `SELECT url AS "pageUrl", clean_text AS text FROM pages WHERE business_id = $1 ORDER BY url`, [businessId])).rows;

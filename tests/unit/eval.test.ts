@@ -90,3 +90,13 @@ it("actual Groq-family gateway fallback cannot be judged by Groq openai-oss, inc
   expect(source.error).toBe("EVALUATION_EXECUTION_ERROR"); expect(source.verdict).toBeNull();
   expect(judgeCall).not.toHaveBeenCalledWith(source.question, expect.anything(), expect.anything());
 });
+it("judge sees the section a question was written from, once, next to the search results",async()=>{
+  const seen:string[][]=[];
+  const judge:Judge={provider:"fake",model:"spy",family:"fake-judge",judge:async(question,_answer,evidence)=>{
+    if(question.evidenceChunkIds.length) seen.push(evidence.map(chunk=>chunk.id));
+    return {pass:true,reason:"ok"};
+  }};
+  await runEvaluation(db,A,version,{crawlRunId:RUN,judge,answerQuestion:async()=>({kind:"refusal",text:"Not found",citations:[],logs:[]})});
+  expect(seen).toHaveLength(1);
+  expect(seen[0].filter(chunkId=>chunkId===CHUNK)).toHaveLength(1);
+});

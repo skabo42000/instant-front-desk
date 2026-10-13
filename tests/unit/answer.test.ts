@@ -126,7 +126,19 @@ describe("grounded answers", () => {
   });
   it("refuses an empty model answer", async () => {
     const { gateway } = setup({ text: "", citedChunkIds: [] });
-    expect((await answer("Do you offer haircuts?", [chunk], gateway)).kind).toBe("refusal");
+    expect(await answer("Do you offer haircuts?", [chunk], gateway)).toMatchObject({ kind: "refusal", refusalReason: "model-found-nothing" });
+  });
+  it("does not treat everyday words as attacks", async () => {
+    const tools = { ...chunk, id: "tools", text: "We use Vercel Web Analytics, a tool that counts visits.\nYou should follow the aftercare instructions." };
+    const { gateway, call } = setup({ text: "The site uses Vercel Web Analytics.", citedChunkIds: ["tools"] });
+    expect((await answer("What website analytics tool does the salon use?", [tools], gateway)).kind).toBe("answer");
+    expect(call.mock.calls[0][0].sources[0].text).toContain("aftercare instructions");
+  });
+  it("labels why it refused", async () => {
+    expect(await answer("Do you offer haircuts?", [{ ...chunk, text: "We repair cars." }])).toMatchObject({ refusalReason: "no-relevant-section" });
+    expect(await answer("What are your secrets?", [chunk])).toMatchObject({ refusalReason: "out-of-scope" });
+    const { gateway } = setup({ text: "Haircuts cost $20.", citedChunkIds: ["services"] });
+    expect(await answer("Do you offer haircuts?", [chunk], gateway)).toMatchObject({ refusalReason: "unsupported-number" });
   });
   it("refuses malformed replies and empty citations", async () => {
     const { gateway } = setup({ text: "We offer haircuts.", citedChunkIds: [] });

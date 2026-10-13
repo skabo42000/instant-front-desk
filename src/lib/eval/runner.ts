@@ -11,7 +11,7 @@ import type { EmbeddingAdapter } from "../models/embeddings";
 import { questionRepository, type Question } from "./questions";
 import { outputPath } from "../output-path";
 
-export const JUDGE_PROMPT_VERSION = "grounding-judge-v2";
+export const JUDGE_PROMPT_VERSION = "grounding-judge-v3";
 export interface Verdict { pass: boolean; reason: string }
 export interface Judge extends JudgeConfig {
   judge(question: Question, result: AnswerResult, evidence: readonly RetrievedChunk[]): Promise<Verdict>;
@@ -83,7 +83,12 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
       else {
         if (logs.length && !entry.answer.answerFamily) throw new Error("Missing answer family");
         if (entry.answer.answerFamily) assertIndependentJudge(entry.answer.answerFamily, options.judge);
-        const verdict = await options.judge.judge(question, entry.answer, evidence);
+        // The judge also sees the sections the question was written from, so a "not found" reply
+        // cannot pass just because search missed the right section.
+        const reference = (await Promise.all(question.evidenceChunkIds.map(id => repo.getChunk(id))))
+          .filter(chunk => chunk !== null && !evidence.some(found => found.id === chunk.id))
+          .map(chunk => ({ id: chunk!.id, pageUrl: chunk!.pageUrl, heading: chunk!.heading, text: chunk!.text }));
+        const verdict = await options.judge.judge(question, entry.answer, [...evidence, ...reference]);
         if (typeof verdict.pass !== "boolean" || typeof verdict.reason !== "string" || !verdict.reason.trim() || verdict.reason.length > 4000) {
           throw new Error("Malformed judge reply");
         }

@@ -31,6 +31,13 @@ describe("offline retrieval", () => {
     expect((await retrieve("What are your hours?", repo)).chunks[0].id).toBe(result.chunks[0].id);
     expect(await repo.getChunk(result.chunks[0].id)).toMatchObject(result.chunks[0]);
   });
+  it("keyword search adds the phone section for contact questions, only from the same business", async () => {
+    for (const [id, phone, site] of [[A, "202-555-0100", "bright-salon"], [B, "202-555-0110", "maple-repair"]] as const) {
+      const result = await retrieve("How can I call you?", businessRepository(db, id), { topK: 1 });
+      expect(result.chunks.some(chunk => chunk.text.includes(phone))).toBe(true);
+      expect(result.chunks.every(chunk => chunk.pageUrl === `https://${site}.test/`)).toBe(true);
+    }
+  });
   it("irrelevant and empty queries return insufficient evidence and skip answer generation", async () => {
     for (const question of ["quantum spaceship astronomy", "", "the and of"]) {
       const result = await retrieve(question, businessRepository(db, A));

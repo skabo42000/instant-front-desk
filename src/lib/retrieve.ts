@@ -29,6 +29,19 @@ export interface RetrievalResult {
   chunks: RetrievedChunk[];
   contacts: GroundedContact[];
 }
+// Question words -> Postgres regex (case-insensitive) for the section that usually holds that fact.
+const FACTS: [RegExp, string][] = [
+  [/phone|number|call|contact|reach/i, "\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}"],
+  [/email/i, "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}"],
+  [/address|located|location|where (?:is|are)|directions/i,
+    "\\m\\d{2,6}\\s+[a-z0-9 .#-]{2,40}\\m(rt|route|st|street|ave|avenue|rd|road|blvd|dr|drive|ln|lane|hwy|pkwy|suite|ste)\\M|\\m[a-z]{2}\\s+\\d{5}\\M"],
+  [/hours|open|clos/i, "\\m\\d{1,2}(:\\d{2})?\\s*(am|pm|a\\.m\\.|p\\.m\\.)"],
+  [/parking|\bpark\b/i, "parking"],
+  [/book|appointment|schedul|reserv/i, "booking|appointment|schedul"],
+];
+export function factPatterns(question: string): string[] {
+  return FACTS.filter(([words]) => words.test(question)).map(([, pattern]) => pattern);
+}
 export async function retrieve(question: string, repo: Repository,
   options: { adapter?: EmbeddingAdapter; topK?: number; maxDistance?: number } = {},
 ): Promise<RetrievalResult> {
@@ -44,7 +57,13 @@ export async function retrieve(question: string, repo: Repository,
   if (embedding.length !== adapter.dimensions || !embedding.every(Number.isFinite)) throw new Error("Invalid embedding dimension/values");
   const hits = question.trim() && embedding.some(value => value !== 0)
     ? await repo.searchChunks(embedding, adapter.model, topK) : [];
-  const chunks = hits.filter(hit => hit.distance <= maxDistance).map(({ id, pageUrl, heading, text }) =>
-    ({ id, pageUrl, heading, text }));
+  // Hybrid search: contact-type questions (phone, address, hours, parking, booking) also get up to
+  // three sections found by keyword, because meaning-based search often ranks those sections low.
+  const keywordHits = [];
+  if (question.trim()) for (const pattern of factPatterns(question)) keywordHits.push(...await repo.searchChunksByPattern(pattern, adapter.model, 2));
+  const seen = new Set<string>();
+  const unique = <T extends { id: string }>(hit: T) => !seen.has(hit.id) && !!seen.add(hit.id);
+  const chunks = [...hits.filter(hit => hit.distance <= maxDistance).filter(unique), ...keywordHits.filter(unique).slice(0, 3)]
+    .map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
   return { status: chunks.length ? "evidence" : "insufficient evidence", chunks, contacts };
 }
