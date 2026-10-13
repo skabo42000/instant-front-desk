@@ -28,6 +28,7 @@ export interface ModelRequest {
 }
 
 export interface ModelReply {
+  model?: string;
   text: string;
   citedChunkIds: string[];
   usage?: { inputTokens: number; outputTokens: number };

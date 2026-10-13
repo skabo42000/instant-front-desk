@@ -208,3 +208,24 @@ Beginner explanation: an approved list is a saved exam. Each answer gets a verdi
 and crashes remain visible instead of raising the score. Exercise: change one fake
 verdict in `tests/unit/eval.test.ts`, predict the new numerator while the denominator
 stays seven, then run that test. This is practice, not evidence of mastery.
+
+### Optional Gemini text fallback (2026-10-13)
+
+For a separately authorized live evaluation, set process environment
+`GEMINI_TEXT_MODEL` (default `gemini-3.5-flash-lite`) and optionally
+`GEMINI_TEXT_FALLBACK_MODELS` to an ordered comma-separated list of Gemini
+models. The default list is empty. Existing answer/question overrides take
+precedence; the local env-file loader still reads only evaluation keys.
+After the existing one retry, only timeouts and HTTP 5xx failures try the
+next text model. Quota/429 stops immediately. Every retry and fallback uses
+the same max-calls budget. Embeddings and the independent Groq judge do not
+use this list. No additional live checks were performed for this change.
+
+Run reports label each sourced question and generated answer with its model;
+deterministic traps/refusals have no model. The private live report and console
+also list all counted attempts with model names and statuses. This preserves
+the judge's different-family rule because these text fallbacks stay in Gemini.
+Beginner explanation: when one model is temporarily unavailable, the runner
+tries the next configured model while keeping the same call limit. Exercise:
+change a fake fallback test's cap from three to two, predict the stop reason,
+then run `npm test -- tests/unit/live.test.ts`. This is practice, not mastery.

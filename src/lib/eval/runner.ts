@@ -30,6 +30,8 @@ export class FakeJudge implements Judge {
 }
 export interface EvalResult {
   question: Question;
+  questionModel?: string | null;
+  answerModel?: string | null;
   answer: AnswerResult | null;
   verdict: Verdict | null;
   error: string | null;
@@ -47,6 +49,7 @@ export function scoreReport(report: EvalReport) {
 export async function runEvaluation(db: PGlite, businessId: string, version: number, options: {
   crawlRunId: string; judge: Judge; gateway?: ModelGateway; embeddings?: EmbeddingAdapter;
   answerModel?: string;
+  questionModel?: string;
   stopReason?: () => string | null;
   // Called before every question except the first (live runs wait a few seconds here).
   pause?: () => Promise<void>;
@@ -101,6 +104,8 @@ export async function runEvaluation(db: PGlite, businessId: string, version: num
       } else entry.error = options.stopReason?.() ?? "EVALUATION_EXECUTION_ERROR";
       // Never store raw exceptions; provider messages may contain credentials.
     }
+    entry.questionModel = question.kind === "source" ? options.questionModel ?? null : null;
+    entry.answerModel = entry.answer?.logs.filter(log => log.status === "success").at(-1)?.model ?? null;
     if (options.sanitizeResult) entry = options.sanitizeResult(entry);
     report.results.push(entry);
     await db.transaction(async tx => {

@@ -8,6 +8,8 @@ import { evalKeysFromFile, guardedTransport, main, pacedEmbeddings } from "../..
 import { latestReport } from "../../src/lib/eval/runner";
 import { questionRepository } from "../../src/lib/eval/questions";
 import { stableId } from "../../src/lib/chunk";
+import { evaluationProviders, GeminiQuestions, GeminiAnswer } from "../../src/lib/models/providers";
+import { ModelGateway } from "../../src/lib/models/gateway";
 import type { HttpTransport } from "../../src/lib/models/providers";
 
 const GEMINI = "synthetic-live-gemini-marker", GROQ = "synthetic-live-groq-marker";
@@ -124,7 +126,7 @@ it("transport deadlines and raw exceptions never expose keys and exhausted caps 
   await expect(budget.transport("https://fixture.invalid", {})).rejects.toThrow("REQUEST_CAP_REACHED");
   expect(blocked).toHaveBeenCalledTimes(1);
   const timeout = guardedTransport(async () => new Promise(() => {}), 120, [GEMINI], 5);
-  await expect(timeout.transport("https://fixture.invalid", {})).rejects.toThrow("PROVIDER_REQUEST_FAILED");
+  await expect(timeout.transport("https://fixture.invalid", {})).rejects.toThrow("TIMEOUT");
 });
 it("paced embeddings wait before a call that would pass the per-minute cap, then continue", async () => {
   let clock = 0;
@@ -181,4 +183,65 @@ it("second run with same chunks makes 0 embedding calls during ingestion", async
   expect(vi.mocked(second.transport).mock.calls.filter(([url]) => url.includes(":embedContent"))).toHaveLength(0);
   expect(second.output).toContain("chunks: 1");
   expect(second.output).toContain("questions: 7");
+});
+
+it("primary timeout selects a labelled text fallback for questions and answers", async () => {
+  for (const kind of ["questions", "answer"] as const) {
+    const transport = vi.fn(async (url: string) => url.includes("gemini-primary:")
+      ? new Promise<Response>(() => {}) : gemini(kind === "questions" ? [] : { text: "Fixture answer", citedChunkIds: [] }));
+    const budget = guardedTransport(transport, 3, [], 5, async () => {});
+    const providers = evaluationProviders({ ...env, GEMINI_TEXT_MODEL: "gemini-primary", GEMINI_TEXT_FALLBACK_MODELS: " gemini-backup " }, budget.transport, 100);
+    if (kind === "questions") {
+      await providers.questions.generate([]);
+      expect(providers.questions.generatedModel).toBe("gemini-backup");
+    } else {
+      const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model, family: "gemini", adapter: providers.answer }, retry: false, totalTimeoutMs: 1000, attemptTimeoutMs: 1000 });
+      const result = await gateway.generate({ businessId: "fixture", question: "Fixture?", sources: [] });
+      expect(result.ok).toBe(true);
+      expect(result.logs.at(-1)?.model).toBe("gemini-backup");
+    }
+    expect(budget.callsUsed()).toBe(3);
+    expect(budget.callLogs().map(log => [log.model, log.status])).toEqual([["gemini-primary", "timeout"], ["gemini-primary", "timeout"], ["gemini-backup", "success"]]);
+  }
+});
+it("text fallbacks never follow 429, quota, 400, malformed replies or arbitrary exceptions", async () => {
+  for (const [status, body] of [[429, {}], [503, { error: "quota exceeded" }], [400, {}], [200, {}]] as const) {
+    const transport = vi.fn(async () => json(body, status));
+    const budget = guardedTransport(transport, 10, [], 5, async () => {});
+    const provider = new GeminiQuestions(GEMINI, budget.transport, "gemini-primary", 100, ["gemini-backup"]);
+    await expect(provider.generate([])).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(1);
+  }
+  const transport = vi.fn(async () => { throw new Error("fixture transport error"); });
+  const provider = new GeminiAnswer(GEMINI, guardedTransport(transport, 10, []).transport, "gemini-primary", 100, ["gemini-backup"]);
+  await expect(provider.generate({ businessId: "fixture", question: "?", sources: [] })).rejects.toThrow();
+  expect(transport).toHaveBeenCalledTimes(1);
+});
+it("ordered 5xx text fallbacks count against max-calls and stop at the cap", async () => {
+  for (const cap of [2, 3, 5]) {
+    const transport = vi.fn(async (url: string) => url.includes("gemini-last:") ? gemini([]) : json({}, 503));
+    const budget = guardedTransport(transport, cap, [], 5, async () => {});
+    const provider = new GeminiQuestions(GEMINI, budget.transport, "gemini-primary", 100, ["gemini-backup", "gemini-last"]);
+    if (cap === 5) { await provider.generate([]); expect(provider.generatedModel).toBe("gemini-last"); }
+    else { await expect(provider.generate([])).rejects.toThrow(); expect(budget.stopReason()).toBe("REQUEST_CAP_REACHED"); }
+    expect(transport).toHaveBeenCalledTimes(cap);
+    expect(budget.callsUsed()).toBe(cap);
+    expect(budget.callLogs().map(log => log.model)).toEqual(["gemini-primary", "gemini-primary", "gemini-backup", "gemini-backup", "gemini-last"].slice(0, cap));
+  }
+});
+it("fake full run records fallback question and answer models in both report copies", async () => {
+  const f = fixture("fallback-report");
+  const transport: HttpTransport = vi.fn(async (url, init) => url.includes("gemini-primary:generateContent") ? json({}, 503) : f.transport(url, init));
+  await main([f.url, "--approve-generated"], { ...f.dependencies, transport,
+    env: { ...env, GEMINI_TEXT_MODEL: "gemini-primary", GEMINI_TEXT_FALLBACK_MODELS: "gemini-backup" } });
+  const report = (await latestReport(db, f.businessId))!;
+  expect(report.results.filter(r => r.question.kind === "source").every(r => r.questionModel === "gemini-backup")).toBe(true);
+  expect(report.results.some(r => r.answerModel === "gemini-backup")).toBe(true);
+  expect(report.results.filter(r => r.question.kind !== "source").every(r => r.questionModel === null)).toBe(true);
+  for (const path of [outputPath("reports/private", report.id + ".json"), outputPath("data/eval-reports", report.id + ".json")]) {
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    expect(saved.results.some((r: { answerModel: string }) => r.answerModel === "gemini-backup")).toBe(true);
+    expect(saved.results.some((r: { questionModel: string }) => r.questionModel === "gemini-backup")).toBe(true);
+  }
+  expect(f.output.some(line => line.includes("generation model gemini-backup: success"))).toBe(true);
 });

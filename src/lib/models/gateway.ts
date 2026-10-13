@@ -96,7 +96,7 @@ export class ModelGateway {
       }
       const tokens = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
       const log: RequestLog = {
-        provider: route.provider, model: route.model, attempt: logs.length + 1,
+        provider: route.provider, model: reply?.model ?? route.model, attempt: logs.length + 1,
         status, latencyMs: Date.now() - started,
         inputTokens: tokens(reply?.usage?.inputTokens), outputTokens: tokens(reply?.usage?.outputTokens),
         estimatedCost: null,

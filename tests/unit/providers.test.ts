@@ -38,7 +38,7 @@ it("Gemini answers/questions/embeddings and Groq fallback/judge serialize correc
 });
 it("only isolated eval keys and model settings are accessed",()=>{
   const env=new Proxy({} as Record<string,string>,{get:(_,name)=>{
-    if(["GEMINI_ANSWER_MODEL","GEMINI_QUESTION_MODEL","GROQ_MODEL"].includes(String(name))) return undefined;
+    if(["GEMINI_TEXT_MODEL","GEMINI_TEXT_FALLBACK_MODELS","GEMINI_ANSWER_MODEL","GEMINI_QUESTION_MODEL","GROQ_MODEL"].includes(String(name))) return undefined;
     if(name!=="GEMINI_EVAL_API_KEY" && name!=="GROQ_EVAL_API_KEY") throw new Error("Forbidden environment read");
     return KEY;
   }});
@@ -131,4 +131,14 @@ it("echoed keys are rejected before answers or judge reasons can enter reports",
   await expect(new GroqAnswer(KEY,async()=>json(groq({text:KEY,citedChunkIds:[]}))).generate(request)).rejects.toMatchObject({code:"MALFORMED"});
   const escaped = JSON.stringify({text:KEY,citedChunkIds:[]}).replace(KEY, KEY.split("").map(c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,"0")}`).join(""));
   await expect(new GeminiAnswer(KEY,async()=>json({candidates:[{content:{parts:[{text:escaped}]}}]})).generate(request)).rejects.toMatchObject({code:"MALFORMED"});
+});
+
+it("text model default and legacy overrides coexist; fallback models must be Gemini", () => {
+  const keys = { GEMINI_EVAL_API_KEY: KEY, GROQ_EVAL_API_KEY: KEY };
+  const configured = evaluationProviders({ ...keys, GEMINI_TEXT_MODEL: "gemini-configured" }, async () => json({}));
+  expect(configured.answer.model).toBe("gemini-configured");
+  expect(configured.questions.model).toBe("gemini-configured");
+  const legacy = evaluationProviders({ ...keys, GEMINI_TEXT_MODEL: "gemini-configured", GEMINI_ANSWER_MODEL: "gemini-answer", GEMINI_QUESTION_MODEL: "gemini-question" }, async () => json({}));
+  expect(legacy.answer.model).toBe("gemini-answer"); expect(legacy.questions.model).toBe("gemini-question");
+  expect(() => evaluationProviders({ ...keys, GEMINI_TEXT_FALLBACK_MODELS: "openai/gpt-oss-120b" }, async () => json({}))).toThrow();
 });

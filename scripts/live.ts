@@ -10,7 +10,7 @@ import { nodeTransport } from "../src/lib/crawl/safe-fetch";
 import { ingest } from "../src/lib/ingest";
 import { questionRepository } from "../src/lib/eval/questions";
 import { runEvaluation, scoreReport, type Judge } from "../src/lib/eval/runner";
-import { evaluationProviders, type HttpTransport } from "../src/lib/models/providers";
+import { evaluationProviders, ProviderError, type HttpTransport } from "../src/lib/models/providers";
 import { assertIndependentJudge, ModelGateway } from "../src/lib/models/gateway";
 import { outputPath } from "../src/lib/output-path";
 import type { EmbeddingAdapter } from "../src/lib/models/embeddings";
@@ -41,6 +41,7 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
   sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms))) {
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
   let calls = 0;
+  const callLogs: { call: number; service: string; kind: string; model: string; status: string }[] = [];
   let stop: string | null = null;
   let limit: LimitDetail | null = null;
   // Last failed call as "service HTTP 404" or "service timeout": a fixed label, no provider text.
@@ -79,7 +80,10 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
       calls++;
       const call = calls;
       const label = `${hostLabel(url)} call #${call} ${kind} model ${model}`;
+      const log = { call, service: hostLabel(url), kind, model, status: "error" };
+      callLogs.push(log);
       let retryable = false;
+      let failedStatus: number | undefined;
       const controller = new AbortController();
       const abort = () => controller.abort();
       init.signal?.addEventListener("abort", abort, { once: true });
@@ -101,6 +105,7 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
             // Check both keys, including escaped JSON, before any model data is stored.
             if (keys.some(key => key && (raw.includes(key) || JSON.stringify(decoded)?.includes(key)))) throw new Error("SENSITIVE_REPLY");
             if (response.status >= 500 && response.status <= 599) {
+              failedStatus = response.status;
               retryable = true;
               throw new Error("RETRYABLE_HTTP_ERROR");
             }
@@ -111,13 +116,18 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
             controller.signal.addEventListener("abort", () => reject(new Error("REQUEST_TIMEOUT")), { once: true });
           }),
         ]);
+        log.status = response.ok ? "success" : `HTTP ${response.status}`;
         return response;
       } catch (error) {
         if (error instanceof Error && error.message === "REQUEST_TIMEOUT") {
           lastFailure = `${label} timeout after ${timeoutMs} ms`;
           retryable = !init.signal?.aborted;
         }
-        if (stop || !retryable || attempt === 1) throw new Error(stop ?? "PROVIDER_REQUEST_FAILED");
+        log.status = failedStatus ? `HTTP ${failedStatus}` : error instanceof Error && error.message === "REQUEST_TIMEOUT" ? "timeout" : stop ?? "error";
+        if (stop || !retryable || attempt === 1) {
+          if (!stop && retryable) throw new ProviderError(failedStatus ? "HTTP_ERROR" : "TIMEOUT", failedStatus);
+          throw new Error(stop ?? "PROVIDER_REQUEST_FAILED");
+        }
       }
       finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
       // Only transient failures get one retry; the next iteration checks and counts the budget.
@@ -125,7 +135,7 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
     }
     throw new Error("PROVIDER_REQUEST_FAILED");
   };
-  return { transport: guarded, callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit, lastFailure: () => lastFailure,
+  return { transport: guarded, callLogs: () => structuredClone(callLogs), callsUsed: () => calls, stopReason: () => stop, limitDetail: () => limit, lastFailure: () => lastFailure,
     stopForQuota: () => { stop = "FREE_TIER_EXHAUSTED"; } };
 }
 export interface LimitDetail {
@@ -188,7 +198,7 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot load local evaluation settings."); }
   const settings: Record<string, string | undefined> = evalKeysFromFile(file);
   for (const name of KEY_NAMES) if (env[name]) settings[name] = env[name];
-  for (const name of ["GEMINI_ANSWER_MODEL", "GEMINI_QUESTION_MODEL", "GROQ_MODEL"]) settings[name] = env[name];
+  for (const name of ["GEMINI_TEXT_MODEL", "GEMINI_TEXT_FALLBACK_MODELS", "GEMINI_ANSWER_MODEL", "GEMINI_QUESTION_MODEL", "GROQ_MODEL"]) settings[name] = env[name];
   const keys = KEY_NAMES.map(name => settings[name] ?? "");
   const print = (line: string) => (dependencies.output ?? console.log)(redact(line, keys));
   // Outer safety timeout per call; each model step also has its own, shorter limit.
@@ -235,14 +245,15 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     }
     const approved = await questions.approveUnflagged(generated.version);
     const crawlRun = (await db.query<{ id: string }>("SELECT id FROM crawl_runs WHERE business_id=$1 AND status='completed' ORDER BY finished_at DESC LIMIT 1", [businessId])).rows[0];
+    const textDeadline = 65000 * (1 + (settings.GEMINI_TEXT_FALLBACK_MODELS ?? "").split(",").filter(name => name.trim()).length);
     const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model,
-      family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: 65000, totalTimeoutMs: 65000 });
+      family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: textDeadline, totalTimeoutMs: textDeadline });
     const report = await runEvaluation(db, businessId, approved.version, { crawlRunId: crawlRun.id, judge, gateway,
-      embeddings, answerModel: providers.answer.model, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
+      embeddings, answerModel: providers.answer.model, questionModel: providers.questions.generatedModel ?? undefined, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
       sanitizeResult: entry => JSON.parse(redact(JSON.stringify(entry), keys)) });
     const score = scoreReport(report);
     await mkdir(outputPath("reports/private"), { recursive: true });
-    await writeFile(outputPath("reports/private", `${report.id}.json`), redact(JSON.stringify({ ...report, score, callsUsed: budget.callsUsed(), limit: budget.limitDetail() }, null, 2), keys), { mode: 0o600 });
+    await writeFile(outputPath("reports/private", `${report.id}.json`), redact(JSON.stringify({ ...report, score, callsUsed: budget.callsUsed(), callLogs: budget.callLogs(), limit: budget.limitDetail() }, null, 2), keys), { mode: 0o600 });
     print(`score: ${score.passed}/${score.total}`);
     for (const failure of score.failures) print(`failure: ${failure.question.question} — ${(failure.error ?? failure.verdict?.reason ?? "missing verdict").slice(0, 200)}`);
     print(`execution errors: ${report.results.filter(r => r.error).length}`);
@@ -256,6 +267,7 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     if (env.LIVE_DEBUG === "yes" && error instanceof Error) print(`debug: ${error.name}: ${error.message.slice(0, 300)}`);
     process.exitCode = 1;
   } finally {
+    for (const log of budget.callLogs()) print(`${log.service} call #${log.call} ${log.kind} model ${log.model}: ${log.status}`);
     print(`calls used: ${budget.callsUsed()}`);
     if (budget.lastFailure()) print(`last failed call: ${budget.lastFailure()}`);
     if (db && !dependencies.db) await db.close();
