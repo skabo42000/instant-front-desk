@@ -45,7 +45,7 @@ export function createChatHandler(getDatabase: () => Promise<PGlite>, limiter: C
       const db = await getDatabase();
       const business = await findBusiness(db, input.slug);
       if (!business) return reply({ error: "That business was not found." }, 404);
-      if (!limiter.take(business.businessId, clientId)) return reply({ error: "Please wait a minute before asking again." }, 429);
+      if (!(await limiter.take(business.businessId, clientId))) return reply({ error: "Please wait a minute before asking again." }, 429);
       const sources = await retrieve(input.question.trim(), businessRepository(db, business.businessId));
       const result = await answer(input.question.trim(), sources.chunks, gateway(), sources.contactChunks);
       // Logs and provider settings never leave the server.
