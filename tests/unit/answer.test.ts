@@ -187,6 +187,13 @@ describe("grounded answers", () => {
     const { gateway } = setup({ text: "Haircuts cost $20.", citedChunkIds: ["services"] });
     expect(await answer("Do you offer haircuts?", [chunk], gateway)).toMatchObject({ refusalReason: "unsupported-number" });
   });
+  it("treats numbered-list markers as formatting, but still checks other numbers", async () => {
+    const steps = { ...chunk, text: "Our services: talk, plan, build, improve." };
+    const listed = setup({ text: "1. Talk\n2. Plan\n3) Build\n4. Improve", citedChunkIds: ["services"] });
+    expect(await answer("What services do you offer?", [steps], listed.gateway)).toMatchObject({ kind: "answer" });
+    const priced = setup({ text: "1. Talk costs $20", citedChunkIds: ["services"] });
+    expect(await answer("What services do you offer?", [steps], priced.gateway)).toMatchObject({ refusalReason: "unsupported-number" });
+  });
   it("refuses malformed replies and empty citations", async () => {
     const { gateway } = setup({ text: "We offer haircuts.", citedChunkIds: [] });
     expect((await answer("Do you offer haircuts?", [chunk], gateway)).kind).toBe("refusal");

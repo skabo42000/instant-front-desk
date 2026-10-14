@@ -52,12 +52,30 @@ const FACTS: [RegExp, string][] = [
 export function factPatterns(question: string): string[] {
   return FACTS.filter(([words]) => words.test(question)).map(([, pattern]) => pattern);
 }
+const PHRASE_STOP_WORDS = new Set(("a an the is are do does did what which when where who how much many can could i you your my " +
+  "their they it its of for to and or in on at by with from please tell me about business we our us have has offer " +
+  "use used using need there this that be will would should any some kind kinds type types").split(" "));
+// Neighbouring question words ("good fit", "change ... software", "service providers") as Postgres
+// regexes: up to two filler words between them, word stems so plurals still match.
+export function phrasePatterns(question: string): string[] {
+  const words = (question.toLowerCase().match(/[a-z]+/g) ?? []).filter(word => word.length > 2 && !PHRASE_STOP_WORDS.has(word))
+    .map(word => word.length > 4 ? word.replace(/(?:es|s)$/, "") : word);
+  const patterns: string[] = [];
+  // Also pair words one apart, so "change my existing software" still finds "change my software".
+  for (const gap of [1, 2]) for (let i = 0; i + gap < words.length; i++) {
+    if (words[i] === words[i + gap]) continue;
+    patterns.push(`\\m${words[i]}\\w*\\W+(\\w+\\W+){0,2}${words[i + gap]}`);
+  }
+  return [...new Set(patterns)].slice(0, 10);
+}
+// A phrase found in this many sections or more (for example the business name) points nowhere.
+const COMMON_PHRASE_HITS = 4;
 export async function retrieve(question: string, repo: Repository,
   options: { adapter?: EmbeddingAdapter; topK?: number; maxDistance?: number } = {},
 ): Promise<RetrievalResult> {
   const adapter = options.adapter ?? new FakeEmbeddings();
   await assertEmbeddingSpace(repo, adapter);
-  const topK = options.topK ?? 5;
+  const topK = options.topK ?? 8;
   if (!Number.isInteger(topK) || topK < 1 || topK > 100) throw new Error("topK must be 1 to 100");
   // Euclidean distance on normalized fake vectors; real models need calibration.
   const maxDistance = options.maxDistance ?? 1.25;
@@ -76,10 +94,15 @@ export async function retrieve(question: string, repo: Repository,
   const headingHits = [];
   if (question.trim()) for (const pattern of headingPatterns(question)) headingHits.push(...await repo.searchChunksByHeading(pattern, adapter.model));
   if (question.trim()) for (const pattern of factPatterns(question)) keywordHits.push(...await repo.searchChunksByPattern(pattern, adapter.model, 2));
+  const phraseHits = [];
+  if (question.trim()) for (const pattern of phrasePatterns(question)) {
+    const found = await repo.searchChunksByPattern(pattern, adapter.model, COMMON_PHRASE_HITS);
+    if (found.length < COMMON_PHRASE_HITS) phraseHits.push(...found);
+  }
   const seen = new Set<string>();
   const unique = <T extends { id: string }>(hit: T) => !seen.has(hit.id) && !!seen.add(hit.id);
   const chunks = [...headingHits.filter(unique).slice(0, 8), ...keywordHits.filter(unique).slice(0, 6),
-    ...hits.filter(hit => hit.distance <= maxDistance).filter(unique)]
+    ...phraseHits.filter(unique).slice(0, 4), ...hits.filter(hit => hit.distance <= maxDistance).filter(unique)]
     .map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
   return { status: chunks.length ? "evidence" : "insufficient evidence", chunks, contacts, contactChunks };
 }

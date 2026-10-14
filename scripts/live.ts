@@ -37,6 +37,8 @@ export function redact(value: string, keys: readonly string[]): string {
   for (const key of keys) if (key) value = value.split(key).join("[redacted]");
   return value;
 }
+const MAX_RATE_WAITS = 3;
+const MAX_RATE_WAIT_SECONDS = 20;
 export function guardedTransport(transport: HttpTransport, maxCalls: number, keys: readonly string[], timeoutMs = 5000,
   sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms))) {
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
@@ -51,14 +53,27 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
     catch { return "unknown"; }
   };
   // Keep only a short label (which service, which window), never the provider's raw message.
-  const recordLimit = (url: string, raw: string, retryAfter: string | null) => {
+  const classifyLimit = (url: string, raw: string, retryAfter: string | null): LimitDetail => {
     const host = (() => { try { return new URL(url).hostname; } catch { return ""; } })();
     const window = /per.?day|\b(?:RPD|TPD)\b|daily/i.test(raw) ? "per-day"
       : /per.?minute|\b(?:RPM|TPM)\b/i.test(raw) ? "per-minute" : "unknown";
-    limit = { service: host.endsWith("groq.com") ? "groq" : host.endsWith("googleapis.com") ? "gemini" : "other",
+    return { service: host.endsWith("groq.com") ? "groq" : host.endsWith("googleapis.com") ? "gemini" : "other",
       window, kind: /token/i.test(raw) ? "tokens" : /request/i.test(raw) ? "requests" : "unknown",
       retryAfterSeconds: retryAfter && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) : null };
+  };
+  // A per-minute limit with a short stated wait clears by itself: wait and try again (at most
+  // MAX_RATE_WAITS per call, each counted against the call cap). Anything else stops the run.
+  let rateWaitMs = 0;
+  const handleLimit = (url: string, raw: string, retryAfter: string | null, rateWaits: number): never => {
+    const detail = classifyLimit(url, raw, retryAfter);
+    const seconds = detail.retryAfterSeconds;
+    if (detail.window === "per-minute" && seconds !== null && seconds <= MAX_RATE_WAIT_SECONDS && rateWaits < MAX_RATE_WAITS) {
+      rateWaitMs = (seconds + 1) * 1000;
+      throw new Error("RATE_WAIT");
+    }
+    limit = detail;
     stop = "FREE_TIER_EXHAUSTED";
+    throw new Error(stop);
   };
   const guarded: HttpTransport = async (url, init) => {
     let model = "unknown";
@@ -73,6 +88,7 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
         if (typeof supplied === "string" && /^[a-zA-Z0-9/._-]{1,100}$/.test(supplied)) model = supplied;
       }
     } catch { /* Log fixed labels only for unknown requests. */ }
+    let rateWaits = 0;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (stop) throw new Error(stop);
       if (calls >= maxCalls) { stop = "REQUEST_CAP_REACHED"; throw new Error(stop); }
@@ -95,12 +111,12 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
             const response = await transport(url, { ...init, signal: controller.signal, redirect: "error" });
             const raw = await response.text();
             if (!response.ok) lastFailure = `${label} HTTP ${response.status}`;
-            if (response.status === 429) { recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!); }
+            if (response.status === 429) handleLimit(url, raw, response.headers.get("retry-after"), rateWaits);
             let decoded: unknown;
             try { decoded = JSON.parse(raw); } catch { /* Adapter rejects malformed JSON. */ }
             const hasError = decoded && typeof decoded === "object" && "error" in decoded;
             if ((!response.ok || hasError) && /quota|resource_exhausted|rate.?limit|free.?tier/i.test(raw)) {
-              recordLimit(url, raw, response.headers.get("retry-after")); throw new Error(stop!);
+              handleLimit(url, raw, response.headers.get("retry-after"), rateWaits);
             }
             // Check both keys, including escaped JSON, before any model data is stored.
             if (keys.some(key => key && (raw.includes(key) || JSON.stringify(decoded)?.includes(key)))) throw new Error("SENSITIVE_REPLY");
@@ -119,6 +135,14 @@ export function guardedTransport(transport: HttpTransport, maxCalls: number, key
         log.status = response.ok ? "success" : `HTTP ${response.status}`;
         return response;
       } catch (error) {
+        if (error instanceof Error && error.message === "RATE_WAIT") {
+          log.status = "rate-limited (per-minute), waited";
+          rateWaits++;
+          clearTimeout(timer);
+          await sleep(rateWaitMs);
+          attempt--;
+          continue;
+        }
         if (error instanceof Error && error.message === "REQUEST_TIMEOUT") {
           lastFailure = `${label} timeout after ${timeoutMs} ms`;
           retryable = !init.signal?.aborted;

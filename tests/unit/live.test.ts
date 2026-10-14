@@ -166,6 +166,31 @@ it("retries 5xx once, but never 429, quota, 4xx or arbitrary exceptions", async 
   }
 });
 
+it("per-minute 429 with a short retry-after waits and retries; per-day or long waits still stop", async () => {
+  const perMinute = () => new Response(JSON.stringify({ error: { message: "Rate limit reached on tokens per minute (TPM)" } }), { status: 429, headers: { "retry-after": "2" } });
+  const transport = vi.fn().mockResolvedValueOnce(perMinute()).mockResolvedValueOnce(json({ ok: true }));
+  const sleep = vi.fn(async () => {});
+  const budget = guardedTransport(transport, 5, [], 5, sleep);
+  const response = await budget.transport("https://api.groq.com/openai/v1/chat/completions", { body: JSON.stringify({ model: "openai/gpt-oss-120b" }) });
+  expect(response.ok).toBe(true);
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(3000);
+  expect(budget.callsUsed()).toBe(2);
+  expect(budget.stopReason()).toBeNull();
+  expect(budget.callLogs().map(log => log.status)).toEqual(["rate-limited (per-minute), waited", "success"]);
+
+  for (const [message, retryAfter] of [["tokens per day (TPD)", "2"], ["tokens per minute (TPM)", "120"], ["tokens per minute (TPM)", null]] as const) {
+    const blocked = vi.fn(async () => new Response(JSON.stringify({ error: { message } }), { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} }));
+    const stopped = guardedTransport(blocked, 5, [], 5, async () => {});
+    await expect(stopped.transport("https://api.groq.com/openai/v1/chat/completions", { body: "{}" })).rejects.toThrow("FREE_TIER_EXHAUSTED");
+    expect(blocked).toHaveBeenCalledTimes(1);
+  }
+
+  const always = vi.fn(async () => perMinute());
+  const capped = guardedTransport(always, 10, [], 5, async () => {});
+  await expect(capped.transport("https://api.groq.com/openai/v1/chat/completions", { body: "{}" })).rejects.toThrow("FREE_TIER_EXHAUSTED");
+  expect(always).toHaveBeenCalledTimes(4);
+});
+
 it("retry cannot exceed the hard call cap", async () => {
   const transport = vi.fn(async () => json({}, 503));
   const budget = guardedTransport(transport, 1, [], 5, async () => {});

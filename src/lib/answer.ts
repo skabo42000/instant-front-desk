@@ -100,7 +100,9 @@ export async function answer(
   // The answer may be reworded, but it cannot add a number (price, time, phone) the cited text lacks.
   // "9:00" on the site also allows "9" in the answer ("9 AM").
   const citedNumbers = new Set(cited.flatMap((chunk) => numbers(chunk!.text).flatMap((value) => [value, ...value.split(/[.:,]/)])));
-  if (numbers(reply.text).some((value) => !citedNumbers.has(value))) return refuse("unsupported-number", result.logs, result.family);
+  // List markers ("1. Talk", "2) Plan") are formatting, not facts.
+  const withoutListMarkers = reply.text.replace(/^\s*\d{1,2}[.)]\s+/gm, "");
+  if (numbers(withoutListMarkers).some((value) => !citedNumbers.has(value))) return refuse("unsupported-number", result.logs, result.family);
   return {
     kind: "answer", text: reply.text.trim(), answerFamily: result.family, logs: result.logs,
     citations: [...new Set(reply.citedChunkIds)].map((id) => {
