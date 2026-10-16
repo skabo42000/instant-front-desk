@@ -1,0 +1,63 @@
+{
+  "fictional": true,
+  "dateNote": "2026-10-16 is an invented example date, not an observed business event.",
+  "business": {
+    "businessId": "00000000-0000-0000-0000-000000000101",
+    "name": "Maple Street Dental (fictional example)",
+    "slug": "fictional-maple-street-dental",
+    "sourceUrl": "https://maple-street-dental.test"
+  },
+  "content": "Fictional example only. Dental checkups. Saturday: 9 am to noon. Appointments required.",
+  "report": {
+    "id": "00000000-0000-0000-0000-000000000201",
+    "businessId": "00000000-0000-0000-0000-000000000101",
+    "createdAt": "2026-10-16T12:00:00.000Z",
+    "questionVersion": 1,
+    "crawlRunId": "00000000-0000-0000-0000-000000000301",
+    "answerModel": "fictional-example-answer (never called)",
+    "judgeModel": "fictional-example-judge (never called)",
+    "answerPromptVersion": "fictional-example",
+    "judgePromptVersion": "fictional-example",
+    "results": [
+      {
+        "question": {
+          "id": "00000000-0000-0000-0000-000000000401",
+          "question": "Fictional example: what service is listed?"
+        },
+        "answer": {
+          "text": "Fictional example: dental checkups."
+        },
+        "verdict": {
+          "pass": true,
+          "reason": "Fictional example matches saved text."
+        },
+        "error": null
+      },
+      {
+        "question": {
+          "id": "00000000-0000-0000-0000-000000000402",
+          "question": "Fictional example: what are the Saturday hours?"
+        },
+        "answer": {
+          "text": "Fictional example: open weekdays."
+        },
+        "verdict": {
+          "pass": false,
+          "reason": "Fictional answer omitted Saturday hours: 9 am to noon."
+        },
+        "error": null
+      },
+      {
+        "question": {
+          "id": "00000000-0000-0000-0000-000000000403",
+          "question": "Fictional example: are appointments required?"
+        },
+        "answer": {
+          "text": "Fictional example: appointments required."
+        },
+        "verdict": null,
+        "error": "JUDGE_EXECUTION_ERROR"
+      }
+    ]
+  }
+}
