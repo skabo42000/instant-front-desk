@@ -167,3 +167,9 @@ it("text model default and legacy overrides coexist; fallback models must be Gem
   expect(legacy.answer.model).toBe("gemini-answer"); expect(legacy.questions.model).toBe("gemini-question");
   expect(() => evaluationProviders({ ...keys, GEMINI_TEXT_FALLBACK_MODELS: "openai/gpt-oss-120b" }, async () => json({}))).toThrow();
 });
+it("Gemini replies that stopped early are rejected; a normal STOP is accepted",async()=>{
+  const reply=(finishReason:string)=>({candidates:[{finishReason,content:{parts:[{text:JSON.stringify({text:"You can always find the most up-",citedChunkIds:[]})}]}}]});
+  for(const reason of ["MAX_TOKENS","SAFETY","RECITATION","OTHER"])
+    await expect(new GeminiAnswer(KEY,async()=>json(reply(reason))).generate(request)).rejects.toMatchObject({code:"MALFORMED"});
+  await expect(new GeminiAnswer(KEY,async()=>json(reply("STOP"))).generate(request)).resolves.toMatchObject({text:"You can always find the most up-"});
+});

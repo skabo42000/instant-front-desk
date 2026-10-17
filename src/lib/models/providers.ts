@@ -89,6 +89,8 @@ const GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite";
 const GROQ_MODEL = "openai/gpt-oss-120b";
 function geminiText(reply: Record<string, unknown>): string {
   const candidate = object(list(reply.candidates)[0]);
+  // A reply cut short (token limit, safety, recitation) is never treated as a complete answer.
+  if (candidate.finishReason !== undefined && candidate.finishReason !== "STOP") throw new ProviderError("MALFORMED");
   return list(object(candidate.content).parts).map(part => text(object(part).text)).join("");
 }
 function answerReply(raw: unknown): ModelReply {
