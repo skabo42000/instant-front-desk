@@ -6,16 +6,17 @@ import { businessRepository } from "../src/lib/db/repository";
 import { benchmarkHash, exportBenchmark, fingerprint, importReview, loadSnapshot, reviewProvenance, validateBenchmark, type Benchmark } from "../src/lib/eval/benchmark";
 import { reviewPage } from "../src/lib/eval/review-page";
 import { bm25Rerank, retrievalMetrics } from "../src/lib/eval/retrieval-metrics";
-import { prepareAnswerEvidence, ANSWER_PROMPT_VERSION } from "../src/lib/answer";
+import { answer, prepareAnswerEvidence, ANSWER_PROMPT_VERSION } from "../src/lib/answer";
 import { retrieve, RETRIEVAL_VERSION } from "../src/lib/retrieve";
 import { GeminiEmbeddings } from "../src/lib/models/providers";
 import { FakeEmbeddings } from "../src/lib/models/embeddings";
 import { evalKeysFromFile, guardedTransport } from "./live";
 import { evaluationProviders } from "../src/lib/models/providers";
 import { ModelGateway } from "../src/lib/models/gateway";
-import { compareBenchmarkReports, evaluateBenchmark, GroqQualityJudge, scoreBenchmarkReport, type BenchmarkReport } from "../src/lib/eval/benchmark-runner";
+import { compareBenchmarkReports, evaluateBenchmark, GroqQualityJudge, QUALITY_JUDGE_VERSION, scoreBenchmarkReport, type BenchmarkReport } from "../src/lib/eval/benchmark-runner";
 import { pilotSnapshotSql } from "../src/lib/eval/pilot-export";
 import { applyAiReview, type AiReviewNotes } from "../src/lib/eval/ai-review";
+import { acceptedInputs } from "../src/lib/eval/accepted-inputs";
 
 async function json<T>(filename: string): Promise<T> { return JSON.parse(await readFile(filename, "utf8")) as T; }
 async function save(filename: string, value: unknown) {
@@ -64,6 +65,55 @@ export async function main(args: string[]): Promise<void> {
     const b = applyAiReview(await json<Benchmark>(file), await json<AiReviewNotes>(rest[0]));
     await save(rest[1],b);
     console.log(JSON.stringify({ file:resolve(rest[1]),benchmarkHash:benchmarkHash(b),...reviewProvenance(b),cases:b.cases.length }));
+  } else if (command === "prepare-accepted") {
+    if (!file || !rest[0] || !rest[1] || !rest[2]) throw new Error("prepare-accepted AI_BUNDLE PRIOR_QUERIES OUTPUT_BUNDLE OUTPUT_QUERIES");
+    await requireNewOutput(rest[1]);
+    await requireNewOutput(rest[2]);
+    const prepared = acceptedInputs(await json<Benchmark>(file), await json<QueryCache>(rest[0]));
+    // Never publish an incomplete cache as ready for a zero-embedding answer run.
+    if (prepared.needsEmbedding.length) {
+      console.log(JSON.stringify({ needsEmbedding: prepared.needsEmbedding }));
+      throw new Error("Changed or missing query vectors require a separately authorized embedding run");
+    }
+    await save(rest[1], prepared.bundle);
+    await save(rest[2], prepared.cache);
+    console.log(JSON.stringify({ benchmarkHash: benchmarkHash(prepared.bundle), ...reviewProvenance(prepared.bundle),
+      cases: prepared.bundle.cases.length, cached: Object.keys(prepared.cache.queries).length, needsEmbedding: [] }));
+  } else if (command === "plan-answer") {
+    if (!file || !rest[0] || !rest[1]) throw new Error("plan-answer AI_BUNDLE QUERY_CACHE OUTPUT");
+    await requireNewOutput(rest[1]);
+    const b = await json<Benchmark>(file);
+    const cache = await json<QueryCache>(rest[0]);
+    const prepared = acceptedInputs(b, cache);
+    if (prepared.needsEmbedding.length) throw new Error("Plan requires every query cached");
+    const db = await openDatabase();
+    try {
+      await loadSnapshot(db, b);
+      const repo = businessRepository(db, b.snapshot.business.businessId);
+      const embeddings = { model: cache.model, dimensions: 768, async embed(text: string) { return cache.queries[fingerprint(text)]; } };
+      const cases = [];
+      for (const q of b.cases.filter(q => q.decision === "include")) {
+        const found = await retrieve(q.question, repo, { adapter: embeddings });
+        let calls = 0;
+        // Empty synthetic replies exercise the actual pre-model refusal path, not answer quality.
+        const gateway = new ModelGateway({ retry: false, primary: { provider: "fake", model: "offline-plan", family: "fake",
+          adapter: { async generate() { calls++; return { text: "", citedChunkIds: [] }; } } } });
+        const result = await answer(q.question, found.chunks, gateway, found.contactChunks);
+        cases.push({ id: q.id, kind: q.kind, question: q.question, answerCalls: calls,
+          deterministicRefusal: calls ? null : result.refusalReason });
+      }
+      const answerCalls = cases.reduce((sum, q) => sum + q.answerCalls, 0);
+      const judgeCalls = cases.length;
+      const plan = { schema: 1, offline: true, qualityMeasured: false, benchmarkHash: benchmarkHash(b), snapshotHash: b.snapshotHash,
+        queryCacheHash: fingerprint(cache), ...reviewProvenance(b), answerPromptVersion: ANSWER_PROMPT_VERSION,
+        judgePromptVersion: QUALITY_JUDGE_VERSION, embeddingModel: cache.model, needsEmbedding: [],
+        expectedCalls: { answers: answerCalls, judges: judgeCalls, embeddings: 0, total: answerCalls + judgeCalls },
+        // Two primary gateway routes, then Groq fallback. Fallback cannot receive a same-family judge.
+        worstCase: { withoutRateWaits: 4 * answerCalls + 2 * judgeCalls,
+          withRateWaits: 10 * answerCalls + 5 * judgeCalls, enforcedPerProcessCap: 100 }, cases };
+      await save(rest[1], plan);
+      console.log(JSON.stringify({ report: resolve(rest[1]), ...plan.expectedCalls, worstCase: plan.worstCase, ...reviewProvenance(b) }));
+    } finally { await db.close(); }
   } else if (command === "cache-queries") {
     if (!file || !rest[0] || process.env.LIVE_OK !== "yes" || process.env.FREE_TIER_CONFIRMED !== "yes") throw new Error("Free-only authorization required");
     await requireNewOutput(rest[0]);
@@ -183,5 +233,5 @@ export async function main(args: string[]): Promise<void> {
     const queries: Record<string, number[]> = {};
     for (const q of b.cases) queries[fingerprint(q.question)] = await adapter.embed(q.question);
     await save(rest[0], { schema: 1, snapshotHash: b.snapshotHash, model: adapter.model, queries });
-  } else throw new Error("Commands: export, review-page, import-review, apply-ai-review, cache-queries, retrieval, answer, compare, pilot-export, fake-cache");
+  } else throw new Error("Commands: export, review-page, import-review, apply-ai-review, prepare-accepted, plan-answer, cache-queries, retrieval, answer, compare, pilot-export, fake-cache");
 }

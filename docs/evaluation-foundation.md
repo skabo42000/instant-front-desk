@@ -106,6 +106,13 @@ paths are checked before model calls so an existing filename cannot waste quota.
 
 ## Commands after human review and quota recovery
 
+For the AI-reviewed provisional run authorized in the October 17 task brief,
+use the [gate 2 runbook](pilot-gate-2-runbook.md). Both expected accepted-input
+bundles and reviewed caches now exist; its pinned live commands use fresh answer
+output paths and require no embedding calls. This does not mark the dataset
+human-reviewed or change the release gate. The commands below are historical
+templates, not an instruction to overwrite the prepared files.
+
 Do not run these live commands until the owner has confirmed quota has reset;
 both accounts must remain Free with paid billing disabled. Keys stay in ignored
 `.env.local`. Only isolated evaluation keys are loaded by the CLI.
