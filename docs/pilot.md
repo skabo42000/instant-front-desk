@@ -110,6 +110,36 @@ do not restore a stale database copy that replenishes usage budgets.
    expire after 60 seconds. It is bounded operational metadata, not business data.
    Local PGlite tests are not a substitute. Credentials must already be in the
    process environment; this tool never prints them.
+
+   A separate local engineering proof is available on this Mac:
+
+   ```sh
+   npm run check-shared-local -- --dry-run data/local-postgres-dry.json
+   npm run check-shared-local -- data/local-postgres-proof.json
+   ```
+
+   The dry run loads and hashes db/001–008 without starting a server or executing
+   SQL. The live command uses embedded Postgres 18.4 and two direct SQL connections
+   for the same 24-request/three-accept race, budget-stop persistence and database
+   stop/restart checks. This is distinct from the Supabase PostgREST gate above;
+   readiness deliberately does not accept its report as the Supabase proof.
+   Native pgvector must be available to that Postgres installation to apply all
+   eight migrations unchanged. The installed embedded package does not bundle it;
+   missing pgvector is reported as a failed prerequisite, never silently skipped.
+
+   Data is temporary under `~/ifd-postgres/run-<random>`, outside OneDrive and this
+   project. `IFD_POSTGRES_ROOT` overrides the parent directory; project/OneDrive
+   paths (including symlinks) are rejected. No existing cluster is reused. The
+   cluster is retained only across the test's orderly restarts, then stopped and
+   removed in cleanup. Output files are created exclusively (choose a fresh name),
+   without connection credentials. No `.env.local` or provider keys are loaded.
+
+   Each live check has a `pass` field. In particular, the unsaved-stop safety check
+   fails if a new budget can reserve after recovery: `limitationObserved` records
+   whether the open outage issue was actually reproduced. Overall exit status is
+   nonzero for that safety failure or an unavailable prerequisite; a completed
+   experiment does not imply the limitation is fixed. Orderly shutdown is tested,
+   not machine power loss, hosted availability, browser roles or model quality.
 7. Prepare the acceptance JSON described below, set the deployment environment
    values to the matching hashes/IDs, and run `npm run readiness -- packet.json`.
    A pass checks local artifacts/configuration; it is not deployment authorization.

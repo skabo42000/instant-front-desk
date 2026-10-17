@@ -1,5 +1,39 @@
 # Local validation — October 15, 2026
 
+## Local direct-SQL proof command — added October 17, 2026
+
+`npm run check-shared-local -- --dry-run data/local-postgres-dry.json` validates
+loading and hashes of db/001–008 offline. It does not execute migrations or prove
+concurrency. `npm run check-shared-local -- data/local-postgres-proof.json` attempts
+an isolated embedded Postgres 18.4 run with two connections, the existing shared
+limit/budget classes and unchanged SQL migrations. Native pgvector is required;
+it is not bundled in the installed embedded package. Missing prerequisites and
+sandbox filesystem/loopback failures yield a nonpassing JSON report.
+
+The report distinguishes the 24-request reservation race (three expected accepts,
+zero errors), cross-connection budget stop, a stop saved before database restart,
+and a stop that cannot be saved during an outage. The latter safety check fails
+if reservations resume after recovery, explicitly recording the observed open
+limitation from `security-review-2026-10-16.md`; no fix is assumed. Live checks that
+never ran carry `pass: false`, `observed: false`. No provider calls or process-local latch claim.
+
+The temporary cluster lives outside OneDrive/project under `~/ifd-postgres`
+(override parent with `IFD_POSTGRES_ROOT`), is stopped and removed on completion,
+and uses ephemeral credentials omitted from reports. No stand-in roles are needed:
+the migrations conditionally grant/revoke existing roles. The proof is local
+Postgres via direct SQL, distinct from the actual Supabase PostgREST concurrency,
+permissions and outage gates in `pilot.md`. It is not deployment evidence and
+does not change application behavior or readiness acceptance.
+
+Executed in the delegated Mac sandbox on October 17: dry run passed (eight
+migrations); live attempt failed with `EPERM` creating `~/ifd-postgres`, before
+starting Postgres. No concurrency or outage behavior was observed. The full
+offline suite passed **336 tests, one skipped, across 28 files**. Typecheck with
+`--incremental false` and the production webpack build passed. An earlier
+typecheck overlapping build regeneration failed on missing `.next/types` files;
+that attempt is not a passing check. Full `git diff --check` reports pre-existing
+CRLF whitespace in the four files explicitly excluded from this task.
+
 Prototype only. Bosko authorized free work and confirmed in this chat that both
 isolated evaluation accounts are Free with paid billing disabled. This is an
 owner-confirmed account setting, not an independently verified billing read.

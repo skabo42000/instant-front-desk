@@ -18,6 +18,8 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "embedded-postgres": "18.4.0-beta.17",
+    "pg": "8.23.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
     "vitest": "^4.0.0"
@@ -38,6 +40,7 @@
     "benchmark": "node --conditions=react-server scripts/run-benchmark.cjs",
     "monitoring": "node --conditions=react-server scripts/run-operations.cjs monitoring",
     "readiness": "node --conditions=react-server scripts/run-operations.cjs readiness",
+    "check-shared-local": "node --conditions=react-server scripts/run-shared-local.cjs",
     "check-shared": "node --conditions=react-server scripts/run-operations.cjs shared-check",
     "check-pilot": "node scripts/check-pilot.cjs",
     "mcp": "node scripts/run-mcp.cjs",
