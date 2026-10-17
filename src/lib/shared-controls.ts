@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { PGlite } from "@electric-sql/pglite";
 import type { RateLimitStore, RateLimitEntry } from "./rate-limit-store";
+import { LocalProviderStop } from "./provider-stop";
 
 export type Rpc = <T>(name: string, args: Record<string, unknown>) => Promise<T>;
 export interface ProviderBudget { reserve(maxCalls: number): Promise<boolean>; stop(): Promise<void> }
@@ -64,11 +65,24 @@ export class PostgresRateLimitStore implements RateLimitStore {
   }
 }
 export class PostgresProviderBudget implements ProviderBudget {
-  constructor(private readonly rpc: Rpc) {}
+  private stopped = false;
+  constructor(private readonly rpc: Rpc, private readonly localStop: LocalProviderStop) {}
   async reserve(maxCalls: number): Promise<boolean> {
+    if (this.stopped || this.localStop.exists()) {
+      this.stopped = true;
+      await this.rpc("ifd_stop_calls", {});
+      return false;
+    }
     const result = await this.rpc<boolean>("ifd_reserve_call", { max_calls: maxCalls });
     if (typeof result !== "boolean") throw new Error("Invalid budget response");
     return result;
   }
-  async stop(): Promise<void> { await this.rpc("ifd_stop_calls", {}); }
+  async stop(): Promise<void> {
+    this.stopped = true;
+    // Write before awaiting the DB; even a fresh process can replay a failed stop.
+    let localFailed = false;
+    try { this.localStop.mark(); } catch { localFailed = true; }
+    await this.rpc("ifd_stop_calls", {});
+    if (localFailed) throw Error("Local provider stop unavailable");
+  }
 }

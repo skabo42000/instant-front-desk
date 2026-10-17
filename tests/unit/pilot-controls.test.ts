@@ -1,4 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalProviderStop } from "../../src/lib/provider-stop";
 import type { PGlite } from "@electric-sql/pglite";
 import { seedChatDatabase } from "../helpers/chat-database";
 import { businessRepository } from "../../src/lib/db/repository";
@@ -10,6 +14,9 @@ import { pilotConfigurationIssues } from "../../src/lib/pilot-policy";
 import { migrateDatabase } from "../../src/lib/db/client";
 const A="00000000-0000-0000-0000-000000000001",B="00000000-0000-0000-0000-000000000002";
 let db: PGlite;
+const stopDirectory = mkdtempSync(join(tmpdir(), "ifd-stop-test-"));
+const localStop = new LocalProviderStop(stopDirectory);
+afterAll(() => rmSync(stopDirectory, { recursive: true, force: true }));
 beforeAll(async()=>{db=await seedChatDatabase();},30000);
 afterAll(async()=>{await db?.close();});
 it("shares all-or-nothing limits between independent store objects on one PGlite connection",async()=>{
@@ -32,14 +39,14 @@ it("shares all-or-nothing limits between independent store objects on one PGlite
   expect(await first.consume([{key:"contention-fixture",limit:3}],60000)).toBe(true);
 });
 it("a durable provider budget survives object restart and cannot be raised or replenished by config",async()=>{
-  const first=new PostgresProviderBudget(databaseRpc(db));
+  const first=new PostgresProviderBudget(databaseRpc(db), localStop);
   expect(await first.reserve(2)).toBe(true);
-  expect(await new PostgresProviderBudget(databaseRpc(db)).reserve(60)).toBe(true);
+  expect(await new PostgresProviderBudget(databaseRpc(db), localStop).reserve(60)).toBe(true);
   expect(await first.reserve(60)).toBe(false);
   expect((await db.query<{used:number;call_limit:number}>("SELECT used,call_limit FROM pilot_budget")).rows[0]).toMatchObject({used:2,call_limit:2});
   await db.query("DELETE FROM pilot_budget");
   expect(await first.reserve(3)).toBe(true);await first.stop();
-  expect(await new PostgresProviderBudget(databaseRpc(db)).reserve(3)).toBe(false);
+  expect(await new PostgresProviderBudget(databaseRpc(db), localStop).reserve(3)).toBe(false);
 });
 it("budgets reserve before any provider request and database failure prevents calls",async()=>{
   const transport=vi.fn(async()=>Response.json({}));

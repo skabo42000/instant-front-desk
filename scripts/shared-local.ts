@@ -4,6 +4,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { PostgresProviderBudget, PostgresRateLimitStore, type Rpc } from "../src/lib/shared-controls";
+import { LocalProviderStop } from "../src/lib/provider-stop";
+import { createChatRuntime } from "../src/lib/chat-runtime";
 
 export const SCOPE = "Local Postgres 18.4 via direct SQL; not Supabase PostgREST/hosted, not a deployment proof.";
 export const MIGRATIONS = ["001_initial.sql", "002_embedding_dimensions.sql", "003_question_lists.sql", "004_eval_reports.sql", "005_pilot_controls.sql", "006_pilot_reads.sql", "007_pilot_permissions.sql", "008_budget_stop.sql"];
@@ -150,19 +152,21 @@ export async function main(args: string[]) {
       const key = `client:local-proof-${randomUUID()}`;
       report.checks.concurrency = summarizeRace(await Promise.allSettled(Array.from({ length: 24 }, (_, i) =>
         stores[i % 2].consume([{ key, limit: 3 }, { key: `${key}-${i}`, limit: 1 }], 60000))));
-      const budgetA = new PostgresProviderBudget(directRpc(a));
+      const stopDirectory = join(report.dataDirectory, "provider-stop");
+      const budgetA = new PostgresProviderBudget(directRpc(a), new LocalProviderStop(stopDirectory));
       const reserved = await budgetA.reserve(60); await budgetA.stop();
-      const acceptedAfterStop = await new PostgresProviderBudget(directRpc(b)).reserve(60);
+      // Empty local store: prove DB persistence without marker replay hiding a regression.
+      const observerDirectory = join(report.dataDirectory, "observer-stop");
+      const acceptedAfterStop = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(observerDirectory)).reserve(60);
       report.checks.budgetPersistence = { pass: reserved && !acceptedAfterStop, reserved, acceptedAfterStop };
       report.stage = "saved-stop-outage";
       await disconnect(); await cluster.stop(); stopped = true;
       stopped = false; await cluster.start(); a = await connect(); b = await connect();
-      const acceptedAfterRecovery = await new PostgresProviderBudget(directRpc(b)).reserve(60);
+      const acceptedAfterRecovery = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(observerDirectory)).reserve(60);
       report.checks.savedStopOutage = { pass: !acceptedAfterRecovery, acceptedAfterRecovery, scope: "Orderly database stop/restart; not host power loss." };
       // Only this disposable test cluster is reset, to isolate an unsaved quota stop.
       await a.query("TRUNCATE pilot_budget");
-      await new PostgresProviderBudget(directRpc(a)).reserve(60);
-      await disconnect(); await cluster.stop(); stopped = true;
+      await rm(stopDirectory, { recursive: true, force: true });
       let stopRejected = false, reservationRejected = false;
       let connectionRejected = false;
       const outageRpc: Rpc = async <T>(name: string, params: Record<string, unknown>): Promise<T> => {
@@ -172,16 +176,29 @@ export async function main(args: string[]) {
           return await directRpc(c)<T>(name, params);
         } finally { await c.end().catch(() => {}); }
       };
-      const unavailableBudget = new PostgresProviderBudget(outageRpc);
-      try { await unavailableBudget.stop(); } catch { stopRejected = true; }
-      try { await unavailableBudget.reserve(60); } catch { reservationRejected = true; }
+      const observedRpc: Rpc = async <T>(name: string, params: Record<string, unknown>): Promise<T> => {
+        try { return stopped ? await outageRpc<T>(name, params) : await directRpc(a)<T>(name, params); }
+        catch (error) { if (name === "ifd_stop_calls") stopRejected = true; throw error; }
+      };
+      const quotaBudget = new PostgresProviderBudget(observedRpc, new LocalProviderStop(stopDirectory));
+      // Real runtime guard, fake HTTP only: reserve while up, then lose DB before quota arrives.
+      const quotaRuntime = createChatRuntime({ LOCAL_CHAT_MODE: "real", FREE_TIER_CONFIRMED: "yes",
+        GEMINI_EVAL_API_KEY: "synthetic-unused", GROQ_EVAL_API_KEY: "synthetic-unused" }, async () => {
+        await disconnect(); await cluster!.stop(); stopped = true;
+        return Response.json({ error: "quota exceeded" }, { status: 429 });
+      }, quotaBudget);
+      let quotaRejected = false;
+      try { await quotaRuntime("gemini-embedding-001").embeddings.embed("synthetic outage check"); }
+      catch (error) { quotaRejected = (error as { code?: string }).code === "FREE_TIER_EXHAUSTED"; }
+      try { await quotaBudget.reserve(60); } catch { reservationRejected = true; }
       stopped = false; await cluster.start(); b = await connect();
-      const acceptedAfterLostStop = await new PostgresProviderBudget(directRpc(b)).reserve(60);
+      const acceptedAfterLostStop = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(stopDirectory)).reserve(60);
+      const sharedStopped = (await b.query("SELECT stopped FROM pilot_budget WHERE id='pilot'")).rows[0]?.stopped === true;
       report.checks.unsavedStopOutage = {
-        pass: connectionRejected && stopRejected && reservationRejected && !acceptedAfterLostStop,
-        observed: true, connectionRejected, stopRejected, reservationRejected, acceptedAfterRecovery: acceptedAfterLostStop,
+        pass: quotaRejected && connectionRejected && stopRejected && reservationRejected && !acceptedAfterLostStop && sharedStopped,
+        observed: true, quotaRejected, sharedStopped, connectionRejected, stopRejected, reservationRejected, acceptedAfterRecovery: acceptedAfterLostStop,
         limitationObserved: stopRejected && acceptedAfterLostStop,
-        scope: "Failed shared stop and fresh budget after recovery; no provider calls; process-local latches not tested.",
+        scope: "Fake HTTP quota through real runtime; fresh local-store/budget objects replay after recovery on the same filesystem. No provider calls, separate-host or power-loss proof.",
       };
       report.pass = Object.values(report.checks).every(check => check.pass);
       report.stage = "complete";

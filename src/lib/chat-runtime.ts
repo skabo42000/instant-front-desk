@@ -3,6 +3,7 @@ import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
 import { ModelGateway } from "./models/gateway";
 import { evaluationProviders, ProviderError, type HttpTransport } from "./models/providers";
 import { createSupabaseRpc, PostgresProviderBudget, type ProviderBudget } from "./shared-controls";
+import { LocalProviderStop } from "./provider-stop";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 export interface ChatServices {
@@ -46,7 +47,7 @@ export function createChatRuntime(env: Environment = process.env,
         const response = await transport(url, { ...init, redirect: "error" });
         if (response.status === 429) {
           stopped = true;
-          try { await budget?.stop(); } catch { /* Reservations still fail closed while storage is unavailable. */ }
+          try { await budget?.stop(); } catch { /* Budget retains its local stop; this runtime also stays stopped. */ }
           throw new ProviderError("FREE_TIER_EXHAUSTED");
         }
         const raw = await response.text();
@@ -75,5 +76,5 @@ export function createChatRuntime(env: Environment = process.env,
 const local = globalThis as typeof globalThis & { frontDeskChatRuntime?: ChatRuntime };
 export function getChatServices(embeddingModel: string): ChatServices {
   return (local.frontDeskChatRuntime ??= createChatRuntime(process.env, undefined,
-    process.env.IFD_PILOT_MODE === "yes" ? new PostgresProviderBudget(createSupabaseRpc(process.env)) : undefined))(embeddingModel);
+    process.env.IFD_PILOT_MODE === "yes" ? new PostgresProviderBudget(createSupabaseRpc(process.env), new LocalProviderStop()) : undefined))(embeddingModel);
 }

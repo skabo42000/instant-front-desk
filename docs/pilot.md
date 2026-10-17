@@ -71,7 +71,13 @@ Every embedding, answer retry and provider fallback reserves the persistent
 global call budget first. The pilot cap is at most **60 provider attempts total**,
 not 60 chats, and does not reset on restart. A lower configured cap lowers the
 stored ceiling; a higher value cannot increase it. A quota response latches a
-shared stop. Do not replenish counters or change account billing to keep a pilot
+shared stop. A sticky local marker at `data/provider-stop/quota-stop` is written
+before saving that stop and replayed before reservations after DB recovery.
+This protects processes sharing the same retained working directory; it does not
+close the recovery race across independent/ephemeral hosts. Render's ephemeral
+disk cannot provide that durability. See the [October 17 security follow-up](security-review-2026-10-17.md)
+for exact failure windows and operator reset requirements; these remain release
+gates. Do not replenish counters or change account billing to keep a pilot
 running. Any future budget reset requires an operator review and a deliberate
 database action; there is no public reset endpoint.
 
@@ -135,8 +141,11 @@ do not restore a stale database copy that replenishes usage budgets.
    without connection credentials. No `.env.local` or provider keys are loaded.
 
    Each live check has a `pass` field. In particular, the unsaved-stop safety check
-   fails if a new budget can reserve after recovery: `limitationObserved` records
-   whether the open outage issue was actually reproduced. Overall exit status is
+   fails if a fresh budget/store can reserve after recovery, or replay does not
+   save `stopped=true`. The real runtime receives fake HTTP quota after DB shutdown;
+   no model calls are made. Expected `acceptedAfterRecovery=false`,
+   `sharedStopped=true`, `limitationObserved=false`; the fix awaits a live rerun.
+   `limitationObserved` records whether the outage issue recurs. Overall exit status is
    nonzero for that safety failure or an unavailable prerequisite; a completed
    experiment does not imply the limitation is fixed. Orderly shutdown is tested,
    not machine power loss, hosted availability, browser roles or model quality.

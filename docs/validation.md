@@ -1,6 +1,55 @@
 # Local validation — October 15, 2026
 
+## Durable quota-stop fix — October 17, 2026
+
+The coordinator supplied a later live failure: private
+`data/local-postgres-proof-20261017.json` reported `unsavedStopOutage` failing
+with `acceptedAfterRecovery=true`; this worker did not re-run that evidence.
+The fix writes an ignored constant marker at `data/provider-stop/quota-stop`
+before attempting the shared DB stop. A fresh budget/store checks that marker,
+replays `ifd_stop_calls`, and refuses the reservation. A failed lookup/replay
+throws instead of allowing a provider call. The marker is sticky, including
+after successful replay; there is no automatic reset or migration. Tests use
+isolated directories rather than the runtime's marker.
+
+`scripts/shared-local.ts` now exercises the real runtime with fake HTTP quota
+after DB shutdown, then checks a fresh budget/store's refusal and the saved
+`stopped=true` row after recovery. Earlier DB-persistence checks use an empty
+local store so replay cannot mask DB failure. Expected live outcome: all five
+checks pass, `acceptedAfterRecovery=false`, `sharedStopped=true` and
+`limitationObserved=false` for `unsavedStopOutage`. **No live result is claimed.**
+Coordinator next check: `npm run check-shared-local -- data/local-postgres-proof-fix.json`.
+
+Executed offline in this delegated sandbox (temporary paths under ignored
+`data/test-temp` because the default OS temp location is not writable):
+
+- `TMPDIR="$PWD/data/test-temp" TMP="$PWD/data/test-temp" TEMP="$PWD/data/test-temp" npm test`:
+  **344 passed, one skipped (345 total), across 29 files**. The skip is the
+  existing Windows-only cleanup case on this Mac.
+- `TMPDIR="$PWD/data/test-temp" TMP="$PWD/data/test-temp" TEMP="$PWD/data/test-temp" npm test -- tests/unit/provider-stop.test.ts tests/unit/pilot-controls.test.ts tests/unit/security-review.test.ts tests/unit/shared-local.test.ts`:
+  **26 passed across four files**, including eight new marker/outage regressions.
+  Repeated after the final proof-script and DB-only assertion adjustments: same result.
+- `npm run typecheck`: passed.
+- `NEXT_TELEMETRY_DISABLED=1 TMPDIR="$PWD/data/test-temp" npm run build`: passed.
+- `TMPDIR="$PWD/data/test-temp" npm run check-shared-local -- --dry-run data/shared-stop-fix-dry-run.json`:
+  passed; eight unchanged migrations loaded/hashed, **no SQL executed**.
+
+Remaining gaps: death before the marker is durable, simultaneous local-write and
+DB-stop failure, removed/rolled-back markers, replacement/ephemeral hosts,
+different working directories or independent hosts recovering before replay,
+and reservations already checked/in flight. File/directory fsync does not prove
+power-loss or hardware survival. Render's ephemeral disk and OneDrive sync do
+not provide distributed stop safety. All processes must be paused and both local
+markers and the DB budget deliberately reviewed/reset by the operator; there is
+no public reset flow. Actual Postgres rerun, separate application-process/crash
+tests, Supabase grants and independent release acceptance remain unverified.
+See [exact security scope](security-review-2026-10-17.md). No credential files were
+inspected, model/network calls made, dependencies/migrations changed or shared records
+edited. Pre-existing CRLF-only changes and the case-study draft were left alone.
+
 ## Local direct-SQL proof command — added October 17, 2026
+
+Historical command preparation below predates the durable-stop fix above.
 
 `npm run check-shared-local -- --dry-run data/local-postgres-dry.json` validates
 loading and hashes of db/001–008 offline. It does not execute migrations or prove

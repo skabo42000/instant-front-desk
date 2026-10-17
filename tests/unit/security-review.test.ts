@@ -1,17 +1,24 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalProviderStop } from "../../src/lib/provider-stop";
 import type { PGlite } from "@electric-sql/pglite";
 import { openDatabase } from "../../src/lib/db/client";
 import { createSupabaseRpc, databaseRpc, PostgresProviderBudget } from "../../src/lib/shared-controls";
 
 let db: PGlite;
+const stopDirectory = mkdtempSync(join(tmpdir(), "ifd-stop-test-"));
+const localStop = new LocalProviderStop(stopDirectory);
+afterAll(() => rmSync(stopDirectory, { recursive: true, force: true }));
 beforeAll(async () => { db = await openDatabase(); }, 30000);
 afterAll(async () => { await db?.close(); });
 
 it("persists a stop before the first reservation and refuses after restart", async () => {
-  const budget = new PostgresProviderBudget(databaseRpc(db));
+  const budget = new PostgresProviderBudget(databaseRpc(db), localStop);
   await budget.stop();
   await budget.stop();
-  expect(await new PostgresProviderBudget(databaseRpc(db)).reserve(60)).toBe(false);
+  expect(await new PostgresProviderBudget(databaseRpc(db), new LocalProviderStop(join(stopDirectory, "observer"))).reserve(60)).toBe(false);
   expect((await db.query("SELECT used,stopped FROM pilot_budget")).rows).toEqual([{used:0,stopped:true}]);
 });
 
