@@ -32,7 +32,7 @@ export function createSupabaseRpc(env: Readonly<Record<string, string | undefine
       } finally { reader.releaseLock(); }
       const text = Buffer.concat(parts).toString("utf8");
       if (text.includes(key)) throw new Error("RPC_FAILED");
-      const data = JSON.parse(text);
+      const data = text.length === 0 ? null : JSON.parse(text);
       if (JSON.stringify(data)?.includes(key)) throw new Error("RPC_FAILED");
       return data as T;
     } catch { throw new Error("Shared database unavailable"); }

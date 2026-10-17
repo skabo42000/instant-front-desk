@@ -35,11 +35,23 @@ Earlier saved-stop checks use a separate empty local directory so the marker
 cannot hide a DB persistence regression. All resets are confined to its disposable
 cluster/directory. The fake HTTP transport makes no provider calls.
 
-Expected live result: all five checks pass, `unsavedStopOutage` has
+The coordinator's later October 17 report `data/local-postgres-proof-fix.json`
+(2026-10-17T22:38:27.441Z) records **5/5 passing checks**, local direct-SQL only:
+two connections, 24 concurrent requests/exactly three accepts/zero errors,
+cross-connection budget stop, saved-stop recovery and unsaved-stop replay.
+Cleanup stopped and removed the cluster. `unsavedStopOutage` has
 `quotaRejected=true`, `stopRejected=true`, `reservationRejected=true`,
 `connectionRejected=true`, `sharedStopped=true`, `acceptedAfterRecovery=false`
-and `limitationObserved=false`. No live result is claimed here. The coordinator
-must run `npm run check-shared-local -- data/local-postgres-proof-fix.json`.
+and `limitationObserved=false`. This is supplied coordinator evidence, not a new
+worker rerun, hosted Supabase/PostgREST proof or deployment evidence.
+
+The follow-up runtime fix retries `budget.stop()` on refused requests in the
+background, at most once per 30 seconds and without overlapping writes. Failed
+DB reservations no longer consume the process cap; pending slots still prevent
+concurrent overshoot. Empty successful RPC responses (including 204) return null
+after the existing byte-size and credential-echo checks. These changes have
+offline regression coverage; the supplied local live report predates them.
+The exact operator reset is in [pilot instructions](pilot.md#deliberate-budget-reset-operator-only).
 
 ## Exactly what remains uncovered
 
@@ -61,8 +73,9 @@ must run `npm run check-shared-local -- data/local-postgres-proof-fix.json`.
   do not form one atomic transaction.
 - Offline tests use fake HTTP/RPC or single-connection PGlite. The proof script
   uses fresh objects, not a separate application OS process, and orderly database
-  restarts, not machine crashes. Actual Postgres rerun, Supabase permissions,
-  independent review and other pilot acceptance gates remain pending.
+  restarts, not machine crashes. Hosted Supabase permissions, PostgREST
+  `ifd_stop_calls` void-response behavior (empty 2xx/204), hosted concurrency,
+  independent release acceptance and other pilot gates remain pending.
 
 Beginner explanation: the marker is a persistent stop sign. After the database
 comes back, the app copies that stop sign into the database before allowing any

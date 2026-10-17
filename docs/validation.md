@@ -1,5 +1,55 @@
 # Local validation — October 15, 2026
 
+## Answer punctuation investigation — October 17, 2026
+
+The saved salon case in `data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json:1381`
+contains `You can always find the most up-.` with 65 output tokens. The report
+does not retain the raw provider envelope or candidate finish reason, so the
+original full provider text cannot be recovered from this artifact.
+
+No punctuation-based answer truncation was found in the inspected path:
+`src/lib/models/providers.ts:92` joins text parts without separators;
+`:97` reads the JSON `text` string unchanged; `:98` rejects oversized replies
+rather than slicing them. `src/lib/answer.ts:115` only trims outer whitespace.
+The sentence split at `src/lib/answer.ts:51` sanitizes source evidence, not the
+answer. The list-marker replacement at `:112` is used only for numeric validation,
+not returned text. `src/lib/eval/benchmark-runner.ts:115` stores `answer()` directly.
+The 65-token count includes generated JSON/citation IDs and potentially thought
+tokens (`src/lib/models/providers.ts:133`); it does not prove a longer answer existed.
+
+`tests/unit/answer-punctuation.test.ts` supplies fake Gemini responses through
+the real adapter, gateway, answer validation and JSON serialization. Hyphens,
+nonbreaking hyphens, dashes, ellipsis, apostrophes, brackets/citation markers,
+parentheses, slash, colon, semicolon and sentence punctuation survive unchanged.
+These are preservation regressions, not proof of the historical root cause or
+a fix for it. Issue A remains unresolved; raw response/finish metadata from the
+original call (if retained elsewhere) is needed before attributing a cause.
+No additional provider call was made and no speculative text repair was added.
+
+## Runtime/RPC follow-up checks — October 17, 2026
+
+Executed by the delegated worker after the runtime/RPC changes:
+
+- `TMPDIR="$PWD/data/test-temp" TMP="$PWD/data/test-temp" TEMP="$PWD/data/test-temp" npm test -- tests/unit/answer-punctuation.test.ts tests/unit/chat-runtime.test.ts tests/unit/security-review.test.ts tests/unit/provider-stop.test.ts tests/unit/shared-local.test.ts`:
+  **35 passed across five files**.
+- `TMPDIR="$PWD/data/test-temp" TMP="$PWD/data/test-temp" TEMP="$PWD/data/test-temp" npm test`:
+  **358 passed, one skipped (359 total), across 31 files**, exit 0, 139.75 seconds.
+  The existing Windows-only descendant cleanup case is skipped on this Mac.
+- `npm run typecheck`: exit 0, no diagnostics.
+- `NEXT_TELEMETRY_DISABLED=1 TMPDIR="$PWD/data/test-temp" npm run build`:
+  exit 0; production webpack compilation, TypeScript, 4/4 static pages and route
+  generation completed.
+- `TMPDIR="$PWD/data/test-temp" npm run check-shared-local -- --dry-run data/shared-controls-followup-dry-run.json`:
+  exit 0; all eight migrations loaded/hashed, no SQL/server execution. A Node
+  comparison confirmed all hashes match `data/local-postgres-proof-fix.json`.
+
+The runtime retries stopped-budget persistence on refused requests without
+waiting, at most once per 30 seconds, with no overlapping writes. Pending
+reservations protect the process cap without counting failed DB reservations.
+Empty successful RPC bodies return null; invalid JSON, failed HTTP status,
+oversized responses and raw/escaped credential echoes still fail closed.
+These are offline checks; no new hosted or direct-SQL live result is claimed.
+
 ## Durable quota-stop fix — October 17, 2026
 
 The coordinator supplied a later live failure: private
@@ -15,10 +65,14 @@ isolated directories rather than the runtime's marker.
 `scripts/shared-local.ts` now exercises the real runtime with fake HTTP quota
 after DB shutdown, then checks a fresh budget/store's refusal and the saved
 `stopped=true` row after recovery. Earlier DB-persistence checks use an empty
-local store so replay cannot mask DB failure. Expected live outcome: all five
-checks pass, `acceptedAfterRecovery=false`, `sharedStopped=true` and
-`limitationObserved=false` for `unsavedStopOutage`. **No live result is claimed.**
-Coordinator next check: `npm run check-shared-local -- data/local-postgres-proof-fix.json`.
+local store so replay cannot mask DB failure. The coordinator's later October 17
+report `data/local-postgres-proof-fix.json` (2026-10-17T22:38:27.441Z) records
+**5/5 checks passing, local direct-SQL only**: two connections; 24 concurrent
+requests with exactly three accepts and zero errors; cross-connection budget
+stop; saved-stop recovery; unsaved-stop replay. `unsavedStopOutage` records
+`acceptedAfterRecovery=false`, `sharedStopped=true`, `limitationObserved=false`;
+cleanup stopped/removed the cluster. This worker did not rerun the live proof.
+This is not hosted Supabase/PostgREST or deployment evidence.
 
 Executed offline in this delegated sandbox (temporary paths under ignored
 `data/test-temp` because the default OS temp location is not writable):
@@ -41,8 +95,10 @@ and reservations already checked/in flight. File/directory fsync does not prove
 power-loss or hardware survival. Render's ephemeral disk and OneDrive sync do
 not provide distributed stop safety. All processes must be paused and both local
 markers and the DB budget deliberately reviewed/reset by the operator; there is
-no public reset flow. Actual Postgres rerun, separate application-process/crash
-tests, Supabase grants and independent release acceptance remain unverified.
+no public reset flow. See the [exact reset procedure](pilot.md#deliberate-budget-reset-operator-only).
+Separate application-process/crash tests, hosted Supabase grants/anonymous denial,
+hosted concurrency, hosted PostgREST `ifd_stop_calls` void-response behavior
+(empty 2xx/204), and independent release acceptance remain unverified.
 See [exact security scope](security-review-2026-10-17.md). No credential files were
 inspected, model/network calls made, dependencies/migrations changed or shared records
 edited. Pre-existing CRLF-only changes and the case-study draft were left alone.
@@ -330,8 +386,9 @@ older single-verdict 24/26 scores or call assistant review human calibration.
 Private artifacts live under `data/benchmarks/2026-10-15/`. Public-source drafts,
 cached embeddings and retrieval reports are prepared as local files under
 `benchmarks/`; no files have been pushed or published. Owner review, a calibrated
-judge, complete accepted evaluations, actual shared Postgres checks and independent
-security review remain before requesting deployment approval.
+judge, complete accepted evaluations, hosted Supabase/PostgREST checks and
+independent release acceptance remain before requesting deployment approval.
+The later October 17 local direct-SQL 5/5 proof above does not satisfy hosted gates.
 
 ## Delegated AI review — later October 15, 2026
 

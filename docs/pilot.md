@@ -81,6 +81,31 @@ gates. Do not replenish counters or change account billing to keep a pilot
 running. Any future budget reset requires an operator review and a deliberate
 database action; there is no public reset endpoint.
 
+### Deliberate budget reset (operator only)
+
+Reset only after reviewing quota/free-account status and obtaining authorization
+to replenish the pilot budget. A restart alone does not reset shared usage.
+
+1. Set `PILOT_PAUSED=yes` and stop **all** application processes on **every** host,
+   including development servers and workers. Keep them stopped through both
+   resets so an in-memory latch cannot recreate the shared stop or local marker.
+2. On the correct isolated pilot database, execute `DELETE FROM pilot_budget;`
+   using the operator's SQL console. This clears both usage and the stopped flag;
+   the next reservation creates a new budget using the configured cap. Preserve
+   required operational evidence first. Do not alter migrations or source data.
+3. In the application working directory on **every** host, remove the marker
+   `data/provider-stop/quota-stop` (`rm -f data/provider-stop/quota-stop` on macOS/Linux).
+   Check retained volumes, alternate working directories and replacement hosts.
+   Clearing only the row or only one host's marker is insufficient.
+4. Verify the row is absent and each marker is absent, confirm the intended cap,
+   then restart the approved processes and unpause only after the review. Never
+   copy an older database over the live database to reset usage.
+
+While stopped, refused requests retry saving the shared stop in the background
+at most once per 30 seconds, with no overlapping stop writes. The refusal does
+not wait for that retry. This improves recovery in a running process; it cannot
+save an event after that process and its ephemeral marker have both been lost.
+
 Set `PILOT_PAUSED=yes` to stop the invited pilot immediately. Suspend the Render
 service if necessary. Preserve reports before changes; secrets can be rotated in
 provider/hosting dashboards. Redeploy the previous approved revision for rollback;
@@ -144,11 +169,18 @@ do not restore a stale database copy that replenishes usage budgets.
    fails if a fresh budget/store can reserve after recovery, or replay does not
    save `stopped=true`. The real runtime receives fake HTTP quota after DB shutdown;
    no model calls are made. Expected `acceptedAfterRecovery=false`,
-   `sharedStopped=true`, `limitationObserved=false`; the fix awaits a live rerun.
+   `sharedStopped=true`, `limitationObserved=false`. The coordinator's October 17
+   report `data/local-postgres-proof-fix.json` records **5/5 checks passing**:
+   two connections; 24 concurrent requests with exactly three accepts and zero
+   errors; cross-connection budget stop; saved-stop recovery; unsaved-stop replay.
+   The report records cleanup stopped/removed. This is **local direct-SQL only**,
+   not hosted Supabase/PostgREST or deployment proof, and was not rerun by this worker.
    `limitationObserved` records whether the outage issue recurs. Overall exit status is
    nonzero for that safety failure or an unavailable prerequisite; a completed
    experiment does not imply the limitation is fixed. Orderly shutdown is tested,
    not machine power loss, hosted availability, browser roles or model quality.
+   Hosted PostgREST still needs a void-response check for `ifd_stop_calls`
+   (empty 2xx/204), actual grants/anonymous denial, and the hosted concurrency proof.
 7. Prepare the acceptance JSON described below, set the deployment environment
    values to the matching hashes/IDs, and run `npm run readiness -- packet.json`.
    A pass checks local artifacts/configuration; it is not deployment authorization.

@@ -41,6 +41,57 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); });
 
 describe("local real chat, with fake HTTP only", () => {
+  it("retries failed stops on refused requests at most every 30 seconds without waiting", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      const stop = vi.fn<() => Promise<void>>().mockRejectedValueOnce(Error("offline"));
+      const budget = { reserve: vi.fn().mockResolvedValue(true), stop };
+      const http = vi.fn(async () => json({}, 429));
+      const runtime = createChatRuntime(env, http, budget);
+      const services = runtime(model);
+      await expect(services.embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+      expect(stop).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(129_999);
+      expect(() => runtime(model)).toThrow("FREE_TIER_EXHAUSTED");
+      expect(stop).toHaveBeenCalledTimes(1);
+      let finish!: () => void;
+      stop.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      clock.mockReturnValue(130_000);
+      expect(() => runtime(model)).toThrow("FREE_TIER_EXHAUSTED");
+      await Promise.resolve();
+      expect(stop).toHaveBeenCalledTimes(2);
+      clock.mockReturnValue(200_000);
+      expect(() => runtime(model)).toThrow("FREE_TIER_EXHAUSTED");
+      await expect(services.embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+      expect(stop).toHaveBeenCalledTimes(2); // No overlapping writes, even after the interval.
+      finish();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(http).toHaveBeenCalledTimes(1);
+      expect(budget.reserve).toHaveBeenCalledTimes(1);
+    } finally { clock.mockRestore(); }
+  });
+  it("does not burn the process cap on failed reservations, including concurrent outages", async () => {
+    const http = transport();
+    const reserve = vi.fn().mockRejectedValue(Error("offline"));
+    const services = createChatRuntime({ ...env, LOCAL_CHAT_MAX_CALLS: "1" }, http,
+      { reserve, stop: vi.fn().mockResolvedValue(undefined) })(model);
+    const results = await Promise.allSettled([services.embeddings.embed("hours"), services.embeddings.embed("hours")]);
+    expect(results.every(r => r.status === "rejected")).toBe(true);
+    await expect(services.embeddings.embed("hours")).rejects.toThrow();
+    expect(http).not.toHaveBeenCalled();
+    reserve.mockResolvedValue(true);
+    await expect(services.embeddings.embed("hours")).resolves.toHaveLength(768);
+    await expect(services.embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(reserve).toHaveBeenCalledTimes(3);
+  });
+  it("never calls the provider when a shared reservation is refused", async () => {
+    const http = transport();
+    const runtime = createChatRuntime(env, http, { reserve: vi.fn().mockResolvedValue(false), stop: vi.fn().mockResolvedValue(undefined) });
+    await expect(runtime(model).embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+    expect(() => runtime(model)).toThrow("FREE_TIER_EXHAUSTED");
+    expect(http).not.toHaveBeenCalled();
+  });
   it("defaults to offline mode and never uses real keys for fake businesses", () => {
     const http = transport();
     expect(() => createChatRuntime({}, http)(model)).toThrow("LOCAL_CHAT_MODE");

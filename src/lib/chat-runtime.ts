@@ -21,13 +21,27 @@ export function createChatRuntime(env: Environment = process.env,
   let real: ChatServices | undefined;
   let calls = 0;
   let stopped = false;
+  let pendingReservations = 0;
+  let lastStopAttempt = -Infinity;
+  let stopInFlight: Promise<void> | undefined;
+  const persistStop = (): Promise<void> => {
+    if (!budget || stopInFlight || Date.now() - lastStopAttempt < 30_000) return stopInFlight ?? Promise.resolve();
+    lastStopAttempt = Date.now();
+    // Refused requests never wait for storage recovery; failures keep the latch set.
+    stopInFlight = Promise.resolve().then(() => budget.stop()).catch(() => {}).finally(() => { stopInFlight = undefined; });
+    return stopInFlight;
+  };
+  const refuseStopped = (): never => {
+    void persistStop();
+    throw new ProviderError("FREE_TIER_EXHAUSTED");
+  };
   return embeddingModel => {
     if (embeddingModel === fake.embeddings.model) return fake;
     if (embeddingModel !== "gemini-embedding-001") throw new Error("Unsupported business embedding model.");
     if ((env.LOCAL_CHAT_MODE ?? "fake") !== "real" || env.FREE_TIER_CONFIRMED !== "yes") {
       throw new Error("Real chat requires LOCAL_CHAT_MODE=real and FREE_TIER_CONFIRMED=yes.");
     }
-    if (stopped) throw new ProviderError("FREE_TIER_EXHAUSTED");
+    if (stopped) return refuseStopped();
     if (!real) {
       const maxCalls = Number(env.LOCAL_CHAT_MAX_CALLS ?? 60);
       if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error("LOCAL_CHAT_MAX_CALLS must be 1 to 300.");
@@ -35,19 +49,24 @@ export function createChatRuntime(env: Environment = process.env,
       const guarded: HttpTransport = async (url, init) => {
         if (stopped || calls >= maxCalls) {
           stopped = true;
-          throw new ProviderError("FREE_TIER_EXHAUSTED");
+          return refuseStopped();
         }
         if (init.signal?.aborted) throw new ProviderError("TIMEOUT");
-        // Reserve synchronously so simultaneous requests cannot exceed this process's cap.
-        calls++;
-        if (budget && !await budget.reserve(maxCalls)) {
-          stopped = true;
-          throw new ProviderError("FREE_TIER_EXHAUSTED");
-        }
+        // Pending slots prevent concurrent overshoot without charging failed DB calls.
+        if (calls + pendingReservations >= maxCalls) throw new ProviderError("HTTP_ERROR");
+        pendingReservations++;
+        try {
+          if (budget && !await budget.reserve(maxCalls)) {
+            stopped = true;
+            return refuseStopped();
+          }
+          calls++;
+        } finally { pendingReservations--; }
+        if (stopped) return refuseStopped();
         const response = await transport(url, { ...init, redirect: "error" });
         if (response.status === 429) {
           stopped = true;
-          try { await budget?.stop(); } catch { /* Budget retains its local stop; this runtime also stays stopped. */ }
+          await persistStop();
           throw new ProviderError("FREE_TIER_EXHAUSTED");
         }
         const raw = await response.text();
@@ -56,7 +75,7 @@ export function createChatRuntime(env: Environment = process.env,
         if ((!response.ok || (decoded && typeof decoded === "object" && "error" in decoded)) &&
             /quota|resource_exhausted|rate.?limit|free.?tier/i.test(raw)) {
           stopped = true;
-          try { await budget?.stop(); } catch { /* Do not expose storage errors or continue this process. */ }
+          await persistStop();
           throw new ProviderError("FREE_TIER_EXHAUSTED");
         }
         if (keys.some(key => raw.includes(key) || JSON.stringify(decoded)?.includes(key))) throw new ProviderError("MALFORMED");

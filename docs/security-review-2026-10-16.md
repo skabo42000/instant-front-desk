@@ -33,8 +33,8 @@ Node is v24.21.0; npm is 11.19.0.
 | Medium | Fixed in source; checks below | `ifd_stop_calls()` previously updated only an existing budget row. A stop before first reservation disappeared. Migration 008 inserts a stopped singleton if absent and preserves an existing budget on conflict. Regression checks stop-before-reserve, repeated stop, a new budget object, and public-role denial. |
 | Medium | Fixed in source; checks below | Supabase RPC read the entire response before checking its size. It now counts streamed bytes, cancels above 2,000,000 bytes, and rejects oversized declared lengths. A synthetic endless chunked response verifies early cancellation. |
 | Medium | Fixed in source; checks below | The fictional MCP runner used Unix negative-PID signals on Windows, leaving its timeout child alive and hanging cleanup. Windows now uses bounded `taskkill /PID /T /F`, a direct-child fallback and bounded close wait. Added a Windows descendant cleanup regression. No assistant/provider runner was invoked. |
-| Medium | Fix implemented October 17; live verification pending | The lost-unsaved-stop failure now has a sticky local marker and shared-stop replay before reservations. See [dated follow-up](security-review-2026-10-17.md) for evidence and remaining host/storage/race limits. This does not establish cross-host atomic quota enforcement. |
-| Release gate | Open | Real multi-connection rate/budget proof, actual Supabase role grants, independent review, accepted quality evidence and judge calibration remain unverified. PGlite does not prove multi-connection behavior. |
+| Medium | October 17 coordinator local direct-SQL proof: 5/5 pass | The lost-unsaved-stop failure now has a sticky local marker and shared-stop replay before reservations. Source: `data/local-postgres-proof-fix.json`; `acceptedAfterRecovery=false`, `sharedStopped=true`. See [dated follow-up](security-review-2026-10-17.md) for remaining host/storage/race limits. This is not hosted PostgREST or cross-host atomic quota proof; this worker did not rerun it. |
+| Release gate | Open | Hosted Supabase/PostgREST concurrency, actual role grants/anonymous denial, hosted `ifd_stop_calls` empty 2xx/204 void-response check, independent release acceptance, accepted quality evidence and judge calibration remain unverified. Local direct-SQL evidence does not satisfy these gates. |
 
 Read-only inspection also covered MCP schemas, adapter scope checks, streaming
 response cap, redirect/timeout settings, loopback Host/token/origin checks,
@@ -51,7 +51,11 @@ cookie-based and intentionally backed by business/global limits and invitation.
 services or processes, standard Program Files installations, or TCP listener on
 5432 were found. `wsl --list --quiet` reports WSL is not installed. No available
 real multi-connection local Postgres was discovered; no software was installed.
-Rate-limit and budget concurrency proof was therefore not run.
+Rate-limit and budget concurrency proof was therefore not run on that Windows
+session. Superseding October 17 Mac coordinator evidence is recorded above:
+two connections, 24 requests with three accepts and zero errors, cross-connection
+stop, saved-stop recovery and unsaved-stop replay all passed; cleanup passed.
+See [operator reset procedure](pilot.md#deliberate-budget-reset-operator-only).
 
 Executed one tiny Gemini generation attempt with the isolated eval key via:
 
