@@ -47,6 +47,44 @@ export function directRpc(client: SqlClient): Rpc {
     return (await client.query(sql, values)).rows[0].value as T;
   };
 }
+// Supabase-like API roles. Default privileges grant every new public object to them, as hosted projects do,
+// so the proof fails if a migration forgets a revoke.
+export const STAND_IN_ROLES_SQL = `
+CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;`;
+export const BROWSER_ROLES = ["anon", "authenticated"] as const;
+export const SERVER_FUNCTIONS = ["ifd_consume_rate(jsonb,integer)", "ifd_reserve_call(integer)", "ifd_stop_calls()",
+  "ifd_read(uuid,text,text,text,text,vector,integer)"];
+export const TABLES = ["businesses", "crawl_runs", "pages", "chunks", "eval_questions", "eval_runs", "eval_results", "question_evidence",
+  "result_citations", "model_requests", "question_lists", "rate_buckets", "pilot_budget"];
+export async function checkPermissions(client: SqlClient) {
+  const one = async (sql: string, values: unknown[]) => (await client.query(sql, values)).rows[0].value === true;
+  const functionGrants: string[] = [], tableGrants: string[] = [], schemaCreate: string[] = [];
+  for (const role of BROWSER_ROLES) {
+    for (const fn of SERVER_FUNCTIONS) if (await one("SELECT has_function_privilege($1,$2,'EXECUTE') AS value", [role, fn])) functionGrants.push(`${role}:${fn}`);
+    for (const table of TABLES) if (await one("SELECT has_table_privilege($1,$2,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS value", [role, table])) tableGrants.push(`${role}:${table}`);
+    if (await one("SELECT has_schema_privilege($1,'public','CREATE') AS value", [role])) schemaCreate.push(role);
+  }
+  // Real attempts, not only catalog answers: 42501 is insufficient_privilege.
+  const deniedAsAnon = async (sql: string) => {
+    try { await client.query("BEGIN"); await client.query("SET LOCAL ROLE anon"); await client.query(sql); return false; }
+    catch (error) { return (error as { code?: string }).code === "42501"; }
+    finally { await client.query("ROLLBACK"); }
+  };
+  const anonReserveDenied = await deniedAsAnon("SELECT ifd_reserve_call(1000)");
+  const anonStopDenied = await deniedAsAnon("SELECT ifd_stop_calls()");
+  const anonBudgetReadDenied = await deniedAsAnon("SELECT * FROM pilot_budget");
+  const vectorSchema = String((await client.query("SELECT n.nspname AS value FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='vector'")).rows[0]?.value ?? "");
+  const serverRoleCanReserve = await one("SELECT has_function_privilege('service_role','ifd_reserve_call(integer)','EXECUTE') AS value", []);
+  return {
+    pass: !functionGrants.length && !tableGrants.length && !schemaCreate.length && anonReserveDenied && anonStopDenied && anonBudgetReadDenied && vectorSchema === "public",
+    functionGrants, tableGrants, schemaCreate, anonReserveDenied, anonStopDenied, anonBudgetReadDenied, vectorSchema, serverRoleCanReserve,
+    scope: "Local stand-in roles with Supabase-style default grants; catalog checks plus real SET ROLE anon attempts. Not PostgREST/JWT or a hosted project.",
+  };
+}
 export function summarizeRace(results: PromiseSettledResult<boolean>[], expectedAccepted = 3) {
   const accepted = results.filter(r => r.status === "fulfilled" && r.value === true).length;
   const errors = results.filter(r => r.status === "rejected").length;
@@ -75,7 +113,7 @@ export async function main(args: string[]) {
   const report = {
     schema: 1, at: new Date().toISOString(), test: "Local direct-SQL shared controls", scope: SCOPE, dryRun,
     migrations: migrations.map(({ name, sha256 }) => ({ name, sha256 })),
-    roles: "No stand-in roles created: migrations conditionally grant/revoke existing roles. Hosted permissions untested.",
+    roles: "Stand-in anon/authenticated/service_role created before migrations with Supabase-style default grants on public tables/functions/sequences, so db/007 revokes are exercised. Approximation of a hosted project, not one.",
     requestedDataRoot: root,
     dataDirectory: null as string | null, serverVersion: null as string | null,
     stage: "migration-loading", error: null as string | null, pass: false,
@@ -83,7 +121,7 @@ export async function main(args: string[]) {
     cleanup: { stopped: false, removed: false, required: !dryRun },
   };
   if (!dryRun) {
-    for (const name of ["connections", "concurrency", "budgetPersistence", "savedStopOutage", "unsavedStopOutage"]) {
+    for (const name of ["connections", "permissions", "concurrency", "budgetPersistence", "savedStopOutage", "unsavedStopOutage"]) {
       report.checks[name] = { pass: false, observed: false, reason: "Not executed" };
     }
   }
@@ -143,11 +181,15 @@ export async function main(args: string[]) {
       if (!/^18\.4(?:\D|$)/.test(report.serverVersion)) throw Error("Wrong Postgres version");
       report.stage = "pgvector-prerequisite";
       if (!(await a.query("SELECT name FROM pg_available_extensions WHERE name='vector'")).rows.length) throw Error("Missing vector");
+      report.stage = "roles";
+      await a.query(STAND_IN_ROLES_SQL);
       report.stage = "migrations";
       for (const migration of migrations) await a.query(migration.sql);
       report.stage = "checks";
       const pids = await Promise.all([a.query("SELECT pg_backend_pid() AS pid"), b.query("SELECT pg_backend_pid() AS pid")]);
       report.checks.connections = { pass: pids[0].rows[0].pid !== pids[1].rows[0].pid, count: 2 };
+      report.stage = "permissions";
+      report.checks.permissions = await checkPermissions(a);
       const stores = [a, b].map(c => new PostgresRateLimitStore(directRpc(c)));
       const key = `client:local-proof-${randomUUID()}`;
       report.checks.concurrency = summarizeRace(await Promise.allSettled(Array.from({ length: 24 }, (_, i) =>

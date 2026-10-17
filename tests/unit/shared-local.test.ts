@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { directRpc, loadMigrations, main, MIGRATIONS, SCOPE, summarizeRace, validateDataRoot } from "../../scripts/shared-local";
+import { checkPermissions, directRpc, loadMigrations, main, MIGRATIONS, SCOPE, summarizeRace, validateDataRoot } from "../../scripts/shared-local";
 
 describe("local Postgres proof (no server)", () => {
   it("rejects the project, children and any OneDrive directory", () => {
@@ -63,5 +63,20 @@ describe("local Postgres proof (no server)", () => {
       expect(report.cleanup.required).toBe(false);
       await expect(main(["--dry-run", file])).rejects.toThrow();
     } finally { log.mockRestore(); await rm(dir, { recursive: true, force: true }); }
+  });
+});
+describe("local permission check (fake catalog)", () => {
+  const fake = (leak: string | null) => ({ query: async (sql: string, values?: unknown[]) => {
+    if (sql.includes("pg_extension")) return { rows: [{ value: "public" }] };
+    if (sql.startsWith("SELECT ifd_") || sql.startsWith("SELECT * FROM")) throw Object.assign(Error("denied"), { code: "42501" });
+    if (sql.includes("has_")) return { rows: [{ value: sql.includes("service_role") || (leak !== null && JSON.stringify(values).includes(leak)) }] };
+    return { rows: [] };
+  } });
+  it("passes only when browser roles have no grants and real attempts are denied", async () => {
+    expect((await checkPermissions(fake(null))).pass).toBe(true);
+    const leaked = await checkPermissions(fake("ifd_reserve_call"));
+    expect(leaked.pass).toBe(false);
+    expect(leaked.functionGrants).toEqual(["anon:ifd_reserve_call(integer)", "authenticated:ifd_reserve_call(integer)"]);
+    expect((await checkPermissions(fake("pilot_budget"))).tableGrants).toContain("anon:pilot_budget");
   });
 });
