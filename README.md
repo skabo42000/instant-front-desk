@@ -1,234 +1,223 @@
 # Instant Front Desk (working name)
 
-Local prototype, 2026-10-10. Includes bounded website collection, local Postgres
-(PGlite) storage, fake embeddings, retrieval, a guarded answer engine and a minimal
-chat UI, offline evaluation runner, score cards and injectable Gemini/Groq adapters.
-No real-site evaluations,
-customer results or deployment evidence. See `docs/brief.md` for scope and decisions.
+Local prototype, updated October 15, 2026. Collect an approved business website,
+ask questions grounded in its saved pages, and inspect an answer score card.
+Built with Next.js, TypeScript, Tailwind, local Postgres (PGlite + pgvector),
+Gemini answers/embeddings and an independent Groq judge. No public deployment or
+customer-use evidence. Scope and dated decisions: [project brief](docs/brief.md).
 
-## Local evaluation question review
+The evaluation foundation now has [versioned owned-site snapshots and query caches](benchmarks/README.md),
+separate retrieval/grounding/completeness checks, a browser-only human-review file,
+and same-benchmark comparisons. **All 52 questions now have an explicit AI source
+review**, delegated by Bosko instead of manual labeling; this is not human review
+or independent judge calibration. See [the review record](docs/ai-review.md).
+Localhost is intentionally stopped; there is no public testing URL yet.
 
-Milestone 8 adds stored question lists and a local CLI, dated 2026-10-10. Stop the
-web server before using this CLI (the same single-process PGlite restriction applies).
-No network or model credentials are used. With an already ingested business UUID:
+Hybrid search remains the default: a BM25 reranker reduced complete reference
+coverage on the Synq draft and showed no gain on the salon draft. Shared Postgres
+rate limits, persistent provider-call budgets, request metadata, safe cost
+estimates and invitation-only pilot controls are implemented. See
+[evaluation evidence and limitations](docs/evaluation-foundation.md) and the
+[controlled pilot package and gates](docs/pilot.md). Nothing has been deployed.
 
-```powershell
-npm run questions -- <business-uuid> generate
-npm run questions -- <business-uuid> list
-npm run questions -- <business-uuid> show 1
-npm run questions -- <business-uuid> edit 1 <question-uuid> data/replacement.json
-npm run questions -- <business-uuid> approve 2
-```
+## Local MCP extension
 
-Replace the angle-bracket values with actual IDs from ingestion/list output. The
-replacement file is a JSON object with `question`, `expectedBehavior`, and
-`evidenceChunkIds` (an array of that business's stored chunk UUIDs). Traps may use
-an empty evidence array. Keep private review files under ignored `data/`.
+Three read-only MCP tools now expose explicitly approved business metadata and
+saved legacy evaluation reports through the running app's shared database. The
+API is disabled by default, loopback-only by configuration and unavailable in
+pilot mode. See [MCP setup, security bounds and verification](docs/mcp.md). This
+extension makes no model calls. A connected-assistant demonstration is pending.
 
-The fake generator creates 20 section-based questions plus six fixed traps. These
-are repetitive review scaffolding, not measured model-generated question quality.
-Malformed replies or unknown/foreign references remain visible as validation flags
-and prevent approval. Editing copies the whole list into a new unapproved version;
-the previous version remains available. Approval means a human reviewed that
-version, not that any answers passed. The database rejects new eval runs using
-unapproved lists and results referencing another question version. The eval runner
-and completed score cards now use that approval gate. Historical chunk evidence
-is protected by foreign keys: later ingestion that removes referenced chunks can
-fail rather than silently destroy review history.
+## Legacy live evidence
 
-Offline question tests use two fictional businesses in PGlite, including shared
-local chunk IDs, malformed fake replies, all six trap kinds, version edits, approval
-gates and direct SQL checks. No real-site question quality or multi-connection
-concurrency is established. Beginner explanation: each edit saves a fresh copy,
-so a later evaluation can identify exactly which reviewed questions it used.
-Exercise: edit one question, predict which version remains approved, then inspect
-both versions with `show`. This is practice, not proof of mastery.
+| Website | Recorded complete live run | Result | Limits |
+| --- | --- | --- | --- |
+| European Beauty Lounge | October 15, 2026 | 24/26, no execution errors, 74 provider attempts | Fixed restored question set; remaining misses concern a privacy detail and where current prices/deals are listed. |
+| Synq Logic | October 15, 2026 | 24/26, no execution errors, 74 provider attempts | Fixed question set; one missing privacy detail and one judge error on a safe refusal. |
 
-## Local use
+These are small samples on the owner's sites, not customer results. Questions
+were regenerated between older runs; October 15 reruns freeze approved lists and
+the active snapshots. Private reports retain questions, answers, citations, verdicts, errors,
+model labels and prompt versions. New frozen reruns reuse both the stored site
+snapshot and an exact approved question version.
 
-Use Node.js 22 LTS or newer. After dependencies are installed:
+Those scores use the older single-verdict judge. The new three-dimension Synq
+diagnostic hit free-tier exhaustion and had two execution errors, so it is
+inconclusive. Do not compare its grades with the legacy pass rates. Further model
+calls stopped; the new judge still needs human calibration and quota recovery.
 
-```powershell
+October 15 changes connect real local browser chat to matching Gemini embeddings,
+add process-wide call/quota stops, improve coverage/list retrieval and policy-date
+handling, fix database packaging at runtime, and add fixed fictional regression cases. See
+[validation notes](docs/validation.md) for commands and new live results.
+
+## Open the local app
+
+Use Node.js 22 LTS or newer. Install the existing locked dependencies with
+`npm ci`, then run:
+
+```sh
 npm run dev
 ```
 
-Open http://localhost:3000. The setup page lists businesses in
-`data/instant-front-desk` (ignored by Git). To add an approved website, stop the
-server first, run the following command, then restart the server and refresh:
+Open http://127.0.0.1:3000. The home page lists saved businesses. Each
+`/b/<slug>` page has chat and its latest saved score card with failures/errors.
+The server binds to this machine. No public ingestion, question-editing or
+administration endpoints exist.
 
-```powershell
+Stop the server with Ctrl+C before any database CLI command. The CLI and server
+share `data/instant-front-desk`; PGlite supports only one process here.
+
+`IFD_DATABASE_DIR` can select another local folder without replacing the default
+database. Both the web server and CLI read this setting from `.env.local`; a
+process-environment override takes precedence. On this restored Mac, the active
+folder is `data/instant-front-desk-mac`. An optional output-root override keeps
+the current validation reports together:
+
+```sh
+export IFD_OUTPUT_ROOT=data/mac-session
+```
+
+```sh
+npm run local-status
 npm run ingest -- https://approved-site.example/
-npm run dev
 ```
 
-The CLI and web server use the same local database folder. Do not run them together:
-PGlite is intended here for one process and one connection. The setup page explains
-these steps; it does not start website collection. `/b/<slug>` has only chat and an
-answer-check area showing the latest saved run (or an empty state). There are no website collection or evaluation endpoints.
-Unknown businesses return 404.
+`local-status` prints business IDs, page slugs, embedding models, chunk counts and
+latest approved question versions, using no keys or network. Ordinary `ingest`
+uses fake embeddings for offline practice. Real ingestion uses the separately
+authorized live runner below; the two vector spaces are never mixed.
 
-The chat uses the existing fake gateway by default, with no credentials or network
-model calls. Its default script has no replies, so it refuses questions; this is
-not evidence of live answer quality. Offline tests inject scripted replies to
-exercise supported answers and citations. Fake embeddings measure word overlap,
-not meaning. Questions and answers are not persisted; the UI holds only its latest
-answer in memory. Do not add credentials to website text or browser code.
+## Free-only local live chat
 
-## Chat limits and deployment limitations
+By default, chat uses an empty fake answer script and refuses questions. Adding
+keys alone does not enable real calls. For real-ingested businesses, Next.js reads
+these settings from ignored `.env.local`:
 
-`POST /api/chat` accepts a business slug and a question. Questions are limited to
-2,000 characters, streamed request bodies to 12,000 bytes, and answer text to 4,000
-characters. At most five citations are returned, with bounded headings and URLs.
-Oversized or malformed input returns 400. Unsupported/oversized answers produce
-refusals; internal failures return a generic 503 without internal error text.
-Only answer text, kind and citations are returned, never gateway logs or settings.
+```dotenv
+LOCAL_CHAT_MODE=real
+FREE_TIER_CONFIRMED=yes
+LOCAL_CHAT_MAX_CALLS=60
+```
 
-In-memory limits allow 10 requests per client and 60 per business per minute;
-429 responses include Retry-After. The limiter is shared across routes/reloads in
-one server process, with expired entries removed and a bounded map. A client is
-identified by an HttpOnly, SameSite cookie, not untrusted forwarded IP headers.
-Clearing/changing cookies bypasses the client bucket; the business bucket remains.
-Counters now live behind a small `RateLimitStore` interface (`src/lib/rate-limit-store.ts`).
-Only the in-memory store exists; `RATE_LIMIT_STORE` (default `memory`) selects it and
-unknown values fall back to memory with a warning. A `FallbackRateLimitStore` wrapper is
-ready for a future shared store. **Still open before deployment:** a shared store across
-processes (not built yet; see the pull request for options) and a trusted client identity
-at the hosting boundary. Process restarts reset limits. No deployment is authorized.
+Keep the isolated `GEMINI_EVAL_API_KEY` and `GROQ_EVAL_API_KEY` there too. Never use
+the widget key. No Supabase account, database URL, production model keys, Docker
+or paid subscription is needed for this local mode. `MODEL_MODE` belongs to the
+older scaffold config; it does not control local chat.
 
-## Settings and offline checks
+Set `FREE_TIER_CONFIRMED=yes` only after checking that the Gemini project and Groq
+account are Free with paid billing disabled. This is a manual account confirmation,
+not an API-enforced billing guarantee. Model availability and free quota can change.
+Current account settings take precedence over old successful runs.
 
-`.env.example` lists optional settings; local credentials belong only in ignored
-`.env.local`. No credentials are required by this UI. Server configuration, database,
-retrieval and gateway modules are marked `server-only`. Injectable real adapters
-are implemented; setting MODEL_MODE=real does not enable real calls in this UI.
-The brief selects Gemini for answers/embeddings and Groq (openai-oss family) for an
-independent judge and fallback. Provider limits remain unverified.
+The 60-call default (configurable from 1 to 300) counts embeddings, retries and
+fallback attempts across all live chats in one server process. The first quota
+response stops all subsequent live provider requests. There is no automatic paid
+upgrade. Counters survive development reloads but reset on process restart; check
+quota before restarting after a stop. They are not a distributed spending limit.
+Fake-ingested businesses remain offline even when real chat is enabled.
 
-```powershell
+Answers use Gemini; transient failures may use the configured Gemini fallback list
+or the existing Groq answer fallback. All attempts share the cap. A model-family
+fallback cannot judge itself in evaluations. Provider failures return a generic
+503, rather than pretending a website lacks the answer. Chat questions/answers
+are not saved by this app; providers receive live questions and retrieved text.
+
+## Review and rerun a fixed question list
+
+All commands below require the server to be stopped. Substitute the actual IDs and
+versions printed by `local-status`; do not enter the angle brackets literally.
+
+```sh
+npm run questions -- <business-uuid> list
+npm run questions -- <business-uuid> show <version>
+npm run questions -- <business-uuid> edit <version> <question-uuid> data/replacement.json
+npm run questions -- <business-uuid> approve <version>
+```
+
+A replacement contains `question`, `expectedBehavior` and `evidenceChunkIds`.
+Edits save a new unapproved version; old versions remain. Unknown or foreign
+references prevent approval. Approval records that an operator accepted a list
+for a run, not answer quality. Automatic approval of generated questions does not
+establish human review of each question. Website text and model replies are untrusted data.
+
+For a free-only rerun after reviewing the saved list, on this Mac:
+
+```sh
+LIVE_OK=yes FREE_TIER_CONFIRMED=yes npm run live -- https://synqlogic.com/ --reuse-snapshot --question-version <approved-version> --max-calls 100
+```
+
+The frozen mode makes no crawl, ingestion-embedding or question-generation calls.
+It requires an existing snapshot and approved list for that exact origin and
+embedding model, and never approves a different list. Query embeddings, answers
+and judging still consume free provider quota. The call cap includes retries.
+A short, explicitly identified per-minute limit can be waited out (up to three
+waits of at most 21 seconds); daily/unknown limits stop the run.
+
+For initial real ingestion or an intentionally new question set:
+
+```sh
+LIVE_OK=yes FREE_TIER_CONFIRMED=yes npm run live -- https://approved-site.example/ --max-calls 120
+```
+
+This stops after generating questions for review. `--approve-generated` is an
+explicit alternative for approving unflagged generated questions and immediately
+evaluating them; do not use it for a frozen comparison. The CLI loads only eval
+keys from `.env.local`; authorization and model overrides come from the process
+environment. Overrides: `GEMINI_TEXT_MODEL`, `GEMINI_ANSWER_MODEL`,
+`GEMINI_QUESTION_MODEL`, `GEMINI_TEXT_FALLBACK_MODELS` and `GROQ_MODEL`.
+
+Reports stay in ignored `reports/private/` and `data/eval-reports/` and in the local
+database. They are not encrypted or access-controlled by Git ignore rules.
+Missing verdicts and execution errors never count as passes. An independent
+judge also sees the source sections used to write each question, so missed
+retrieval does not make a refusal correct.
+
+## Offline checks and limitations
+
+```sh
 npm run typecheck
-npm run test
-$env:NEXT_TELEMETRY_DISABLED = '1'
-npm run build
-```
-
-The fixtures are fictional `bright-salon` and `maple-repair` websites. Tests run
-without network access or paid resources. The UI tests render the actual pages
-against two seeded in-memory databases, check separation and the unknown-business
-boundary, and use synthetic credential markers to check rendered output. Route
-tests exercise citations, refusals, both rate buckets, invalid/oversized input,
-output caps and generic errors. They do not simulate browser interaction or prove
-that arbitrary sensitive website content is safe. PGlite does not establish
-multi-connection concurrency safety. Live model availability was checked by the coordinator on 2026-10-10 (details
-below); this does not establish service readiness or real-site answer quality.
-
-Beginner explanation: the page sends one question and a business name to the server.
-The server looks only in that business's saved pages, then returns an answer or a
-refusal. An empty score means checks have not run, not that answers passed.
-Exercise: change the rate limit in a local test from one to two, predict which
-request receives 429, and run `npm run test -- tests/unit/chat-route.test.ts`.
-This is practice, not evidence of mastery.
-
-## Offline evaluation and provider setup (2026-10-10)
-
-Stop the web server first, approve a reviewed question version, then use the local CLI:
-
-```powershell
-npm run eval -- <business-uuid> <approved-version> <crawl-run-uuid>
+npm test
+NEXT_TELEMETRY_DISABLED=1 npm run build
 npm run calibration
 ```
 
-The eval CLI uses empty fake answer/judge scripts by default, so it records execution
-errors; it does not manufacture a passing quality score. Tests inject fixed scripts.
-`src/lib/eval/runner.ts` accepts a gateway, embeddings and an independent judge for
-an authorized harness. Reports are stored in the business-scoped database and in
-ignored `data/eval-reports/<run-uuid>.json`. They contain the exact reviewed questions,
-answers, citations, model/family logs, verdicts and answer/judge prompt versions.
-The share page displays the latest score and every failure/error. Reports contain
-private website data: keep them local. The ignored folder is not an access-control
-boundary or encryption; Windows file permissions are inherited from the workspace.
-A score measures only the reviewed sample. Execution failures and missing verdicts
-never count as passes. A Groq openai-oss fallback answer cannot be judged by the Groq openai-oss judge;
-it becomes an execution error until a separately approved independent judge exists.
+With the server running separately, `npm run smoke` checks the home page, saved
+business pages, 404 behavior and invalid chat input over HTTP. It makes no model
+calls. The database packages remain external Node dependencies so their WASM and
+pgvector files can load correctly at runtime. Webpack is used for local builds to
+avoid the restored Turbopack build that stalled while reading OneDrive files.
 
-The four engineer hand-labelled synthetic calibration cases live in
-`tests/fixtures/judge-calibration.json`. The scripted fake judge agrees on 3/4 and
-disagrees on the unsupported competitor comparison (1 disagreement). Running
-`npm run calibration` writes the complete labelled report to
-`data/eval-reports/calibration-fixture.json`. This deliberately includes a disagreement
-to check reporting. It is fixture-only evidence of plumbing, not measured Groq judge
-accuracy or business quality. Labels have not been reviewed by Bosko. Calibration
-judge errors count as disagreements. PGlite checks do not establish real Postgres
-multi-connection behavior, and no two-site validation or provider quota check ran.
+Tests use fictional websites, scripted model replies and injected HTTP transports;
+they make no live model or website requests. Fixed regression cases cover lists,
+process steps, contact facts, policies, coverage, business types and six trap kinds.
+Scripted success establishes plumbing and guards, not real model quality.
+`IFD_OUTPUT_ROOT` sends test reports to a temporary directory.
 
-Real adapters in `src/lib/models/providers.ts` have no default network transport;
-call `evaluationProviders(env, transport)` with a fake transport for offline work.
-They use Gemini for answers, questions and 768-dimensional embeddings, and Groq
-openai/gpt-oss-120b (openai-oss family) for fallback/judging. Responses with the wrong embedding length fail loudly;
-the existing business/chunk metadata stores model and dimension and rejects mixed
-spaces. Defaults are verified live 2026-10-10, may change, per the coordinator
-check recorded in `../ai-os/projects/instant-front-desk.md`: Gemini answers/questions
-use gemini-3.5-flash-lite; gemini-2.5-flash-lite is closed to new users. Groq no
-longer lists a Llama chat model on the checked key; llama-3.3-70b-versatile failed.
-Embeddings stay gemini-embedding-001: every call explicitly requests
-outputDimensionality 768 (verified live); its provider default is 3072.
-`evaluationProviders` accepts GEMINI_ANSWER_MODEL, GEMINI_QUESTION_MODEL (defaults
-to the answer model), and GROQ_MODEL from the supplied env object. Constructor
-overrides also work; validation keeps models within their declared family.
-This update was tested offline; no new live check was performed. Real retrieval thresholds still need calibration.
-Malformed replies, non-2xx responses and deadlines return safe errors. A 429 latches
-that adapter off, stops gateway retries/fallback and stops remaining eval work;
-it never enables billing. A later run/session also requires an explicit quota check.
-`npm run live` waits 3 seconds between questions (`--pause-ms N`, 0 to 60000). When a free
-limit stops a run, the output and private report name the service (gemini/groq) and, when the
-provider says so, per-minute vs per-day and tokens vs requests. The raw provider message is not stored.
+The four synthetic calibration cases intentionally give the fake judge 3/4
+agreement. That is not measured live-judge accuracy. Earlier manual reviews are
+small, informal checks; a separately saved, hand-labelled live calibration set is
+still needed for stronger judge evidence.
 
-### Live run 2026-10-10 and answer rules v2 (2026-10-12)
+Crawler safeguards cover public-address validation, exact-origin scope,
+robots.txt and page/size/time caps. These layers and the answer checks do not prove
+resistance to every injection or every unsupported natural-language claim.
+Real retrieval thresholds still need calibration.
 
-The first live run (own salon site, 26 questions) stopped at a free limit after 10 questions, and
-the assistant refused every one of them, including questions the site answers (hours, a service
-description, where prices are listed). Cause: answer rules v1 required every question word to
-appear in a section and only accepted word-for-word copies of a website line. Answer rules v2
-(`grounded-cited-v2`): price/hours/policy questions still need a section with that kind of fact
-and (if named) the service or day; answers may be reworded but must cite sections, and every
-number in an answer must appear in the cited text. Judge rules v2 (`grounding-judge-v2`): a
-refusal fails when the evidence answers a normal question. Tested offline only; not yet re-run live.
-Test runs write reports to a temp folder (`IFD_OUTPUT_ROOT`), not `reports/private`.
-HTTP tests use synthetic keys and fake responses, including echoed key rejection.
-They do not establish real provider behavior or arbitrary sensitive-content safety.
+Local chat limits are 10 requests per client and 60 per business per minute,
+using an HttpOnly SameSite cookie and bounded memory. Clearing cookies bypasses
+the client bucket; the business bucket remains. Pilot configuration requires
+shared Postgres counters and a persistent global provider-call cap, and rejects
+requests if shared storage fails. Browser identity is still cookie-based, so
+pilot access also requires a private invitation. The real Supabase concurrency
+probe, independent security review and accepted quality benchmarks remain gates.
+PGlite tests do not establish real Postgres multi-connection concurrency behavior.
 
-Before a separately authorized live session, Bosko's personal setup steps are:
+### Live run 2026-10-10 and answer rules v2
 
-1. In Google AI Studio, create an isolated evaluation key with eligible free quota;
-   keep billing disabled and keep the existing widget key untouched. Enter it locally
-   as `GEMINI_EVAL_API_KEY` in ignored `.env.local`, never in chat.
-2. In Groq Console, confirm free quota and billing disabled; create an evaluation key
-   and enter it locally as `GROQ_EVAL_API_KEY`. Current limits remain unverified.
-3. Review the approved site URLs and question versions with the coordinator before
-   any live ingest/eval. No account, network call, paid service or deployment is
-   authorized by these setup notes. CLI adapters do not automatically load env files.
-
-Beginner explanation: an approved list is a saved exam. Each answer gets a verdict,
-and crashes remain visible instead of raising the score. Exercise: change one fake
-verdict in `tests/unit/eval.test.ts`, predict the new numerator while the denominator
-stays seven, then run that test. This is practice, not evidence of mastery.
-
-### Optional Gemini text fallback (2026-10-13)
-
-For a separately authorized live evaluation, set process environment
-`GEMINI_TEXT_MODEL` (default `gemini-3.5-flash-lite`) and optionally
-`GEMINI_TEXT_FALLBACK_MODELS` to an ordered comma-separated list of Gemini
-models. The default list is empty. Existing answer/question overrides take
-precedence; the local env-file loader still reads only evaluation keys.
-After the existing one retry, only timeouts and HTTP 5xx failures try the
-next text model. Quota/429 stops immediately. Every retry and fallback uses
-the same max-calls budget. Embeddings and the independent Groq judge do not
-use this list. No additional live checks were performed for this change.
-
-Run reports label each sourced question and generated answer with its model;
-deterministic traps/refusals have no model. The private live report and console
-also list all counted attempts with model names and statuses. This preserves
-the judge's different-family rule because these text fallbacks stay in Gemini.
-Beginner explanation: when one model is temporarily unavailable, the runner
-tries the next configured model while keeping the same call limit. Exercise:
-change a fake fallback test's cap from three to two, predict the stop reason,
-then run `npm test -- tests/unit/live.test.ts`. This is practice, not mastery.
+Historical context: the first salon run stopped at a free limit and refused every
+question it reached. Rules v1 required excessive word overlap and copied lines.
+Subsequent changes allowed cited rewording, hybrid retrieval, clearer refusal
+reasons, exact citation IDs and numbered-list formatting. Dated run records above
+supersede the old “no real-site evaluations” status. Historical decisions remain
+in `docs/brief.md` and the AI OS project card.

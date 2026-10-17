@@ -1,0 +1,46 @@
+# Prepared only. Creating this service or deploying still requires Bosko's approval.
+# Free service sleeps and has ephemeral disk; production data lives in Supabase.
+services:
+  - type: web
+    name: instant-front-desk-pilot
+    runtime: node
+    plan: free
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --ignore-scripts --no-audit --no-fund && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: IFD_PILOT_MODE
+        value: "yes"
+      - key: IFD_DATA_STORE
+        value: supabase
+      - key: RATE_LIMIT_STORE
+        value: supabase
+      - key: LOCAL_CHAT_MODE
+        value: real
+      - key: LOCAL_CHAT_MAX_CALLS
+        value: "60"
+      - key: FREE_TIER_CONFIRMED
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GEMINI_EVAL_API_KEY
+        sync: false
+      - key: GROQ_EVAL_API_KEY
+        sync: false
+      - key: PILOT_ACCESS_TOKEN
+        generateValue: true
+      - key: PILOT_PUBLIC_ORIGIN
+        sync: false
+      - key: PILOT_BUSINESS_IDS
+        sync: false
+      - key: PILOT_BENCHMARK_HASHES
+        sync: false
+      - key: PILOT_ACCEPTANCE_CONFIRMED
+        sync: false

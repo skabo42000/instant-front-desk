@@ -8,9 +8,14 @@ import { extractContacts, factPatterns, retrieve } from "../../src/lib/retrieve"
 import { answer } from "../../src/lib/answer";
 import { fixtureCrawl } from "../helpers/fixture-crawl";
 import reviewFixtures from "../fixtures/review-fixes.json";
+import regression from "../fixtures/fixed-regression.json";
+import { ModelGateway } from "../../src/lib/models/gateway";
+import { FakeModel } from "../../src/lib/models/fake";
+import { trapQuestions } from "../../src/lib/eval/questions";
 const A = "00000000-0000-0000-0000-000000000001";
 const B = "00000000-0000-0000-0000-000000000002";
 const C = "00000000-0000-0000-0000-000000000003";
+const D = "00000000-0000-0000-0000-000000000004";
 const fixtureId = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 let db: PGlite;
 describe("offline retrieval", () => {
@@ -30,8 +35,41 @@ describe("offline retrieval", () => {
       id: fixtureId(110 + ordinal), pageId: fixtureId(101), ordinal, ...fixture,
       embedding: await adapter.embed(fixture.text), embeddingModel: adapter.model, contentHash: `fixture-${ordinal}`,
     });
+    const marketing = businessRepository(db, D);
+    await marketing.createBusiness({ slug: "marketing-heading", name: "Example studio", sourceUrl: "https://studio.example", phone: null, contactUrl: null, embeddingModel: adapter.model });
+    await marketing.createCrawlRun(fixtureId(200), "completed");
+    const summary = "Manicures, pedicures, lashes and waxing in Springfield. Book an appointment with our friendly studio team.";
+    await marketing.createPage({ id: fixtureId(201), crawlRunId: fixtureId(200), url: "https://studio.example/", title: "Welcome", cleanText: summary, contentHash: "studio" });
+    await marketing.createChunk({ id: fixtureId(202), pageId: fixtureId(201), ordinal: 0, heading: "Feel your best", text: summary,
+      embedding: await adapter.embed(summary), embeddingModel: adapter.model, contentHash: "studio" });
   }, 30000);
   afterAll(async () => { await db?.close(); });
+  it("finds a homepage service list under a marketing heading without relying on vector overlap or URL names", async () => {
+    const result = await retrieve("What services do you offer?", businessRepository(db, D), { maxDistance: 0, topK: 1 });
+    expect(result.chunks.map(c => c.id)).toEqual([fixtureId(202)]);
+    const gateway = new ModelGateway({ primary: { provider: "fake", model: "regression", family: "fake",
+      adapter: new FakeModel([{ text: "Manicures, pedicures, lashes and waxing.", citedChunkIds: [fixtureId(202)] }]) }, retry: false });
+    expect((await answer("What services do you offer?", result.chunks, gateway)).kind).toBe("answer");
+  });
+  // Fixed fictional questions replay past failure types. Scripted replies test retrieval and
+  // answer guards, not live model quality. Real reruns freeze their approved DB version instead.
+  it.each(regression)("fixed regression: $question", async fixture => {
+    const result = await retrieve(fixture.question, businessRepository(db, C));
+    const evidence = fixture.headings.map(heading => result.chunks.find(chunk => chunk.heading === heading &&
+      (!("contains" in fixture) || !fixture.contains || chunk.text.includes(fixture.contains))));
+    expect(evidence.every(Boolean), `Retrieved headings: ${result.chunks.map(c => c.heading).join(", ")}`).toBe(true);
+    const gateway = new ModelGateway({ primary: { provider: "fake", model: "regression", family: "fake",
+      adapter: new FakeModel([{ text: fixture.answer, citedChunkIds: evidence.map(chunk => chunk!.id) }]) }, retry: false });
+    const reply = await answer(fixture.question, result.chunks, gateway, result.contactChunks);
+    expect(reply.kind).toBe("answer");
+    expect(reply.citations.map(c => c.id)).toEqual(evidence.map(chunk => chunk!.id));
+  });
+  it.each(trapQuestions())("fixed safety regression: $kind", async fixture => {
+    const result = await retrieve(fixture.question, businessRepository(db, C));
+    const reply = await answer(fixture.question, result.chunks, undefined, result.contactChunks);
+    expect(reply.kind).toBe("refusal");
+    expect(reply.text).not.toMatch(/VIP package costs|campaign speech|home address is/i);
+  });
   it.each([
     ["What services do you offer?", ["What we do"]],
     ["What are the receptionist benefits?", ["What it does"]],

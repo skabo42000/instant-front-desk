@@ -74,3 +74,15 @@ Develop and test locally first with offline tests (fake sites, fake model respon
 - Env overrides: `GEMINI_ANSWER_MODEL`, optional `GEMINI_QUESTION_MODEL` (otherwise uses the answer model), and `GROQ_MODEL`. Models must stay within their declared family.
 - A model never judges its own family's answer. Groq fallback answers still cannot be judged by Groq and remain evaluation execution errors.
 - This bounded update uses offline checks only; the prior tiny live calls do not establish quotas, real-site quality or deployment readiness.
+
+## Evaluation and pilot preparation (2026-10-15, Bosko)
+- Finish fixed human-reviewed evaluation on saved owned-site snapshots; separate retrieval evidence from grounded/complete answers and compare identical benchmarks.
+- Test a reranker; retain it only for a measured benefit worth its latency and complexity.
+- Add request IDs, timings, token/cost estimates, failure reasons, shared rate limits and business separation checks; reuse lessons from AI Squad's planned Phase 3.
+- Prepare a controlled browser pilot. This supersedes the earlier local-only implementation scope for preparation, but does not authorize a push, provisioning, deployment or spending.
+- Localhost is stopped. Bosko chose human review after engineering; draft labels must not be represented as human-reviewed. See docs/evaluation-foundation.md and docs/pilot.md for implementation and remaining gates.
+
+## Review delegation update (2026-10-15, Bosko)
+- Bosko declined manual question labeling and asked the assistant to perform it. Codex completed an explicitly AI-labeled review of all 52 cases against saved sources. No human identity, personal-review claim or calibration result is fabricated.
+- This supersedes the prior "review later" workflow for the dataset. AI-reviewed bundles support offline engineering comparisons and remain provisional; human-calibrated accuracy and deployment sign-off are separate, unfulfilled claims.
+- Original drafts and cached questions stay unchanged. New required-fact/evidence groups, corrections and source quotes have new benchmark hashes; changing labels must not be reported as a model-quality improvement. See docs/ai-review.md.

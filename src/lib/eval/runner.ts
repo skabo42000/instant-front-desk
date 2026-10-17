@@ -11,7 +11,7 @@ import type { EmbeddingAdapter } from "../models/embeddings";
 import { questionRepository, type Question } from "./questions";
 import { outputPath } from "../output-path";
 
-export const JUDGE_PROMPT_VERSION = "grounding-judge-v4";
+export const JUDGE_PROMPT_VERSION = "grounding-judge-v5";
 export interface Verdict { pass: boolean; reason: string }
 export interface Judge extends JudgeConfig {
   judge(question: Question, result: AnswerResult, evidence: readonly RetrievedChunk[]): Promise<Verdict>;

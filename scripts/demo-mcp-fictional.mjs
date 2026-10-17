@@ -65,6 +65,22 @@ export function verifyEvents(events) {
 
 export async function stopChild(child) {
   if (!child?.pid) return;
+  if (process.platform === 'win32') {
+    // Windows has no negative-PID process groups. Terminate the live process tree.
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise(resolve=>{
+      const killer=spawn('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true});
+      const timer=setTimeout(()=>{killer.kill();resolve();},3000);
+      const done=()=>{clearTimeout(timer);resolve();};
+      killer.once('error',done);killer.once('close',done);
+    });
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(Error('Child cleanup timed out')),2000);
+      child.once('close',()=>{clearTimeout(timer);resolve();});
+    });
+    return;
+  }
   const signal = name=>{try {process.kill(-child.pid,name);} catch { /* Already stopped. */ }};
   signal('SIGTERM');
   if(child.exitCode===null && child.signalCode===null) await new Promise(resolve=>{

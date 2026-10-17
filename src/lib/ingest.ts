@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import { chunkPage, contentHash, stableId } from "./chunk";
 import { crawl, DEFAULT_CRAWL_LIMITS, type CrawlOptions } from "./crawl/crawl";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
-import { assertEmbeddingSpace, type Repository } from "./retrieve";
+import { assertEmbeddingSpace } from "./retrieve";
+import type { businessRepository } from "./db/repository";
 
-export async function ingest(url: string, repo: Repository,
+export async function ingest(url: string, repo: ReturnType<typeof businessRepository>,
   options: { adapter?: EmbeddingAdapter; crawlOptions?: CrawlOptions } = {},
 ) {
   const adapter = options.adapter ?? new FakeEmbeddings();

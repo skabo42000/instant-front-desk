@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
-import { openDatabase } from "../src/lib/db/client";
+import { localDatabasePath, openDatabase } from "../src/lib/db/client";
 import { questionRepository } from "../src/lib/eval/questions";
 
 export const USAGE = "Usage: npm run questions -- <business-uuid> generate|list|show <version>|approve <version>|edit <version> <question-uuid> <replacement.json>";
@@ -20,7 +19,7 @@ export async function execute(db: PGlite, args: readonly string[]): Promise<unkn
 }
 export async function main(args: readonly string[]): Promise<void> {
   if (args.length < 2) throw new Error(USAGE);
-  const db = await openDatabase(resolve("data/instant-front-desk"));
+  const db = await openDatabase(localDatabasePath());
   try { console.log(JSON.stringify(await execute(db, args), null, 2)); }
   finally { await db.close(); }
 }

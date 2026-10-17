@@ -3,9 +3,11 @@ import type { RetrievedChunk } from "./answer";
 import type { businessRepository } from "./db/repository";
 import { EMBEDDING_DIMENSIONS } from "./db/client";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
-import { headingPatterns } from "./question-intents";
+import { headingPatterns, isServiceOverview } from "./question-intents";
 
-export type Repository = ReturnType<typeof businessRepository>;
+export type Repository = Pick<ReturnType<typeof businessRepository>, "getBusiness" | "listPageTexts" | "searchChunks" |
+  "searchChunksByPattern" | "searchChunksByHeading" | "listHomepageSummary">;
+export const RETRIEVAL_VERSION = "hybrid-v3";
 export interface GroundedContact { kind: "phone" | "email"; value: string; pageUrl: string }
 export function extractContacts(pages: readonly { pageUrl: string; text: string }[]): GroundedContact[] {
   const contacts: GroundedContact[] = [];
@@ -33,6 +35,9 @@ export interface RetrievalResult {
 }
 // Question words -> Postgres regex (case-insensitive) for the section that usually holds that fact.
 const FACTS: [RegExp, string][] = [
+  [/\b(?:good|right|best) fit\b|\b(?:business types|industries)\b/i, "good fit|industries|businesses we (help|serve)|business with repetitive"],
+  [/\b(?:located|regions?|service areas?)\b|where.{0,25}(?:based|serve|work)/i,
+    "based in|suburbs|service areas?|serve.{0,25}(area|region|nation)|remotely across"],
   [/technical|tech.{0,12}skills|coding|programming/i, "no (technical|tech|coding)|technical skills|tech.skills|don't need.*(skills|technical)|do not need.*(skills|technical)"],
   [/delet|eras|remove.{0,20}(data|information)/i, "delet|eras|your choices"],
   [/sell|sold|selling/i, "sell|sold|selling|how we use"],
@@ -93,6 +98,8 @@ export async function retrieve(question: string, repo: Repository,
   const keywordHits = [];
   const headingHits = [];
   if (question.trim()) for (const pattern of headingPatterns(question)) headingHits.push(...await repo.searchChunksByHeading(pattern, adapter.model));
+  // Some homepages put the service list under a marketing headline rather than "Services".
+  if (isServiceOverview(question) && !headingHits.length) headingHits.push(...await repo.listHomepageSummary(adapter.model));
   if (question.trim()) for (const pattern of factPatterns(question)) keywordHits.push(...await repo.searchChunksByPattern(pattern, adapter.model, 2));
   const phraseHits = [];
   if (question.trim()) for (const pattern of phrasePatterns(question)) {

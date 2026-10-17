@@ -1,0 +1,15 @@
+[
+  { "question": "What services do you offer?", "headings": ["What we do"], "answer": "Our services are AI receptionist, website chat assistant, custom websites and business automation." },
+  { "question": "What are the receptionist benefits?", "headings": ["What it does"], "answer": "The receptionist answers missed calls, greets callers and passes details to the owner. Appointment booking is available only after activation." },
+  { "question": "What is the process for getting started?", "headings": ["Talk", "Plan", "Build", "Improve"], "answer": "1. Talk: book a free strategy call.\n2. Plan: agree on a focused plan.\n3. Build: build and test before going live.\n4. Improve: review results and improve the setup." },
+  { "question": "Do I need technical skills?", "headings": ["Questions"], "answer": "You do not need technical skills. We set things up for you.", "contains": "technical skills" },
+  { "question": "Do you sell my information?", "headings": ["How we use it"], "answer": "We do not sell your information or use it for ads." },
+  { "question": "How can I request data deletion?", "headings": ["Your choices"], "answer": "You may request deletion of your data by email." },
+  { "question": "What is your pricing approach?", "headings": ["Questions"], "answer": "Cost depends on your automation needs. We find a plan that fits your budget after a free strategy call.", "contains": "Cost depends" },
+  { "question": "How long until launch?", "headings": ["Build"], "answer": "We build and test together before going live in weeks, not months." },
+  { "question": "What types of businesses are a good fit?", "headings": ["Who we help"], "answer": "A good fit is a business with repetitive work: clinics, repair shops, accountants and fitness studios." },
+  { "question": "Where are you located and what regions do you serve?", "headings": ["Based in Springfield", "Springfield and nearby suburbs", "Remote, across the US"], "answer": "We are based in Springfield, Illinois. Nearby suburbs include Fairview, Oak Grove and Westfield. Remote setup and support are available anywhere in the United States." },
+  { "question": "Where do I book appointments?", "headings": ["Booking"], "answer": "Book appointments on our booking page at https://example.test/book." },
+  { "question": "When was the privacy policy last updated?", "headings": ["Privacy policy"], "answer": "The privacy policy was last updated on October 1, 2026." },
+  { "question": "What does your analytics tool use?", "headings": ["Privacy policy"], "answer": "Our analytics tool uses anonymous counts and no advertising cookies." }
+]

@@ -1,7 +1,7 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
-import { openDatabase } from "../src/lib/db/client";
+import { localDatabasePath, openDatabase } from "../src/lib/db/client";
 import { businessRepository } from "../src/lib/db/repository";
 import { stableId } from "../src/lib/chunk";
 import { parsePublicUrl } from "../src/lib/crawl/url-policy";
@@ -16,7 +16,7 @@ import { outputPath } from "../src/lib/output-path";
 import type { EmbeddingAdapter } from "../src/lib/models/embeddings";
 import { cachedEmbeddings } from "../src/lib/models/embedding-cache";
 
-const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--pause-ms N] [--approve-generated]";
+const USAGE = "Usage: npm run live -- <https URL> [--max-calls N] [--pause-ms N] [--approve-generated | --reuse-snapshot --question-version N]";
 // Stays under the inferred Gemini embedding limit of 100 per minute, with margin.
 const EMBEDDINGS_PER_MINUTE = 80;
 const KEY_NAMES = ["GEMINI_EVAL_API_KEY", "GROQ_EVAL_API_KEY"] as const;
@@ -204,18 +204,25 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
   const env = dependencies.env ?? process.env;
   // Refuse before reading credentials, opening the database, or using any transport.
   if (env.LIVE_OK !== "yes") throw new Error("Set LIVE_OK=yes for an explicitly authorized live session.");
+  if (env.FREE_TIER_CONFIRMED !== "yes") throw new Error("Confirm both provider accounts have billing disabled, then set FREE_TIER_CONFIRMED=yes.");
   const url = parsePublicUrl(args[0] ?? "");
   if (url.protocol !== "https:") throw new Error(USAGE);
   // A short pause between questions keeps free per-minute limits from stopping the run.
-  let maxCalls = 120, pauseMs = 3000, approve = false;
+  let maxCalls = 120, pauseMs = 3000, approve = false, reuseSnapshot = false;
+  let questionVersion: number | undefined;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--approve-generated" && !approve) approve = true;
     else if (args[i] === "--max-calls") maxCalls = Number(args[++i]);
     else if (args[i] === "--pause-ms") pauseMs = Number(args[++i]);
+    else if (args[i] === "--reuse-snapshot" && !reuseSnapshot) reuseSnapshot = true;
+    else if (args[i] === "--question-version" && questionVersion === undefined) questionVersion = Number(args[++i]);
     else throw new Error(USAGE);
   }
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);
   if (!Number.isSafeInteger(pauseMs) || pauseMs < 0 || pauseMs > 60000) throw new Error(USAGE);
+  // Freeze both the question list and website snapshot for a comparable rerun.
+  if (reuseSnapshot !== (questionVersion !== undefined) || (reuseSnapshot && approve) ||
+      (questionVersion !== undefined && (!Number.isSafeInteger(questionVersion) || questionVersion < 1))) throw new Error(USAGE);
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>(done => setTimeout(done, ms)));
   let file = "";
   try { file = await (dependencies.readEnv ?? (() => readFile(resolve(".env.local"), "utf8")))(); }
@@ -236,44 +243,53 @@ export async function main(args: readonly string[], dependencies: LiveDependenci
     const judge = dependencies.judge ?? providers.judge;
     assertIndependentJudge(providers.answer.family, judge);
     const embeddings = pacedEmbeddings(providers.embeddings, EMBEDDINGS_PER_MINUTE, sleep);
-    db = dependencies.db ?? await openDatabase(resolve("data/instant-front-desk"));
+    db = dependencies.db ?? await openDatabase(localDatabasePath(env));
     // Separate real vector space from businesses previously created with fake embeddings.
     const businessId = stableId(`${url.origin}|${providers.embeddings.model}`);
     const repo = businessRepository(db, businessId);
+    const questions = questionRepository(db, businessId);
+    if (reuseSnapshot) {
+      // Fail before any crawl or model call, and never create/approve a different list.
+      if (!await repo.getBusiness()) throw new Error("SNAPSHOT_NOT_FOUND");
+      await questions.forRun(questionVersion!);
+    }
     if (!await repo.getBusiness()) await repo.createBusiness({ slug: `live-${businessId}`, name: url.hostname,
       sourceUrl: url.origin, phone: null, contactUrl: null, embeddingModel: providers.embeddings.model });
     const ingestionEmbeddings = cachedEmbeddings(embeddings,
       dependencies.embeddingCacheDirectory ?? outputPath("data/embedding-cache"));
-    const snapshot = await ingest(url.href, repo, { adapter: ingestionEmbeddings, crawlOptions: {
-      ...dependencies.crawlOptions,
-      transport: async request => {
-        if (budget.stopReason()) throw new Error("Live run stopped");
-        const response = await (dependencies.crawlOptions?.transport ?? nodeTransport)(request);
-        if (response.status === 429) {
-          response.destroy(); budget.stopForQuota(); throw new Error("Live run stopped");
-        }
-        return response;
-      },
-    } });
-    print(`pages crawled: ${snapshot.pages}`);
-    print(`chunks: ${snapshot.chunks}`);
-    const questions = questionRepository(db, businessId);
-    const generated = await questions.generate(providers.questions);
-    print(`questions: ${generated.questions.length}`);
-    for (const question of generated.questions.filter(q => q.validationErrors.length)) {
-      print(`flagged: ${question.question} — ${question.validationErrors.join(", ")}`);
-    }
-    if (!approve) {
-      print(`Review via npm run questions -- ${businessId} show ${generated.version}; evaluation stopped. Use --approve-generated only after deciding to approve generated unflagged questions.`);
-      return;
-    }
-    const approved = await questions.approveUnflagged(generated.version);
+    if (!reuseSnapshot) {
+      const snapshot = await ingest(url.href, repo, { adapter: ingestionEmbeddings, crawlOptions: {
+        ...dependencies.crawlOptions,
+        transport: async request => {
+          if (budget.stopReason()) throw new Error("Live run stopped");
+          const response = await (dependencies.crawlOptions?.transport ?? nodeTransport)(request);
+          if (response.status === 429) {
+            response.destroy(); budget.stopForQuota(); throw new Error("Live run stopped");
+          }
+          return response;
+        },
+      } });
+      print(`pages crawled: ${snapshot.pages}`);
+      print(`chunks: ${snapshot.chunks}`);
+      const generated = await questions.generate(providers.questions);
+      print(`questions: ${generated.questions.length}`);
+      for (const question of generated.questions.filter(q => q.validationErrors.length)) {
+        print(`flagged: ${question.question} — ${question.validationErrors.join(", ")}`);
+      }
+      if (!approve) {
+        print(`Review via npm run questions -- ${businessId} show ${generated.version}; evaluation stopped. Use --approve-generated only after deciding to approve generated unflagged questions.`);
+        return;
+      }
+      const approved = await questions.approveUnflagged(generated.version);
+      questionVersion = approved.version;
+    } else print(`reusing stored snapshot and approved question version ${questionVersion}`);
     const crawlRun = (await db.query<{ id: string }>("SELECT id FROM crawl_runs WHERE business_id=$1 AND status='completed' ORDER BY finished_at DESC LIMIT 1", [businessId])).rows[0];
+    if (!crawlRun) throw new Error("SNAPSHOT_NOT_FOUND");
     const textDeadline = 65000 * (1 + (settings.GEMINI_TEXT_FALLBACK_MODELS ?? "").split(",").filter(name => name.trim()).length);
     const gateway = new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model,
       family: providers.answer.family, adapter: providers.answer }, retry: false, attemptTimeoutMs: textDeadline, totalTimeoutMs: textDeadline });
-    const report = await runEvaluation(db, businessId, approved.version, { crawlRunId: crawlRun.id, judge, gateway,
-      embeddings, answerModel: providers.answer.model, questionModel: providers.questions.generatedModel ?? undefined, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
+    const report = await runEvaluation(db, businessId, questionVersion!, { crawlRunId: crawlRun.id, judge, gateway,
+      embeddings, answerModel: providers.answer.model, questionModel: reuseSnapshot ? undefined : providers.questions.generatedModel ?? undefined, stopReason: budget.stopReason, pause: () => sleep(pauseMs),
       sanitizeResult: entry => JSON.parse(redact(JSON.stringify(entry), keys)) });
     const score = scoreReport(report);
     await mkdir(outputPath("reports/private"), { recursive: true });

@@ -51,13 +51,11 @@ describe("store fallback", () => {
     expect(await new FallbackRateLimitStore(primary, fallback).consume([{ key: "a", limit: 1 }], 100)).toBe(false);
     expect(spy).not.toHaveBeenCalled();
   });
-  it("picks memory by default and for unknown RATE_LIMIT_STORE values", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("requires a real shared store for pilots and rejects unknown configuration", () => {
     expect(createRateLimitStore({})).toBeInstanceOf(MemoryRateLimitStore);
     expect(createRateLimitStore({ RATE_LIMIT_STORE: "memory" })).toBeInstanceOf(MemoryRateLimitStore);
-    expect(warn).not.toHaveBeenCalled();
-    expect(createRateLimitStore({ RATE_LIMIT_STORE: "postgres" })).toBeInstanceOf(MemoryRateLimitStore);
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "postgres" })).toThrow();
+    expect(() => createRateLimitStore({ IFD_PILOT_MODE: "yes" })).toThrow();
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "supabase" })).toThrow();
   });
 });

@@ -56,6 +56,20 @@ it.each(["success","failure","timeout"])("stops child process groups on %s",asyn
   await stopChild(child);
   expect(()=>process.kill(child.pid!,0)).toThrow();
 },10000);
+it.runIf(process.platform === "win32")("stops a live Windows child's descendants",async()=>{
+  const child=spawn(process.execPath,["-e","const {spawn}=require('node:child_process'); const grandchild=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); process.send(grandchild.pid); setInterval(()=>{},1000)"],
+    {detached:true,env:privateEnvironment(process.env),stdio:["ignore","ignore","ignore","ipc"]});
+  let descendant:number|undefined;
+  try {
+    descendant=await new Promise<number>((resolve,reject)=>{child.once("message",pid=>resolve(Number(pid)));child.once("error",reject);});
+    await stopChild(child);
+    expect(()=>process.kill(child.pid!,0)).toThrow();
+    expect(()=>process.kill(descendant!,0)).toThrow();
+  } finally {
+    await stopChild(child);
+    if(descendant)try{process.kill(descendant,"SIGKILL");}catch{ /* Already stopped. */ }
+  }
+},10000);
 it("fails verification for absent calls, unrelated tools, foreign IDs and wrong totals",()=>{
   expect(()=>verifyEvents([])).toThrow();
   const event=(tool:string,args:unknown,result:unknown)=>({type:"item.completed",item:{type:"mcp_tool_call",server:"ifd",tool,arguments:args,status:"completed",result:{structured_content:result}}});

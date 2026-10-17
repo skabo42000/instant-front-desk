@@ -128,6 +128,15 @@ export function businessRepository(db: PGlite, businessId: string) {
         WHERE c.business_id = $1 AND c.embedding_model = $2 AND c.heading ~* $3
         ORDER BY p.url, c.ordinal, c.id LIMIT $4`, [businessId, embeddingModel, pattern, limit])).rows;
     },
+    async listHomepageSummary(embeddingModel: string): Promise<SearchHit[]> {
+      return (await db.query<SearchHit>(`SELECT c.business_id AS "businessId",c.id,
+        p.url AS "pageUrl",c.heading,c.text,0 AS distance FROM chunks c
+        JOIN pages p ON p.business_id=c.business_id AND p.id=c.page_id
+        JOIN businesses b ON b.business_id=c.business_id
+        WHERE c.business_id=$1 AND c.embedding_model=$2 AND length(c.text)>=60
+        AND (p.url=b.source_url OR p.url=b.source_url || '/')
+        ORDER BY c.ordinal,c.id LIMIT 3`, [businessId,embeddingModel])).rows;
+    },
     async listPageTexts(): Promise<{ pageUrl: string; text: string }[]> {
       return (await db.query<{ pageUrl: string; text: string }>(
         `SELECT url AS "pageUrl", clean_text AS text FROM pages WHERE business_id = $1 ORDER BY url`, [businessId])).rows;

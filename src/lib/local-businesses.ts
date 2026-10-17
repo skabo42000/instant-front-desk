@@ -1,14 +1,13 @@
 import "server-only";
-import { resolve } from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
-import { openDatabase } from "./db/client";
+import { localDatabasePath, openDatabase } from "./db/client";
 import { businessRepository } from "./db/repository";
 import type { Business } from "./types";
 
 const local = globalThis as typeof globalThis & { frontDeskDatabase?: Promise<PGlite> };
 export function getLocalDatabase(): Promise<PGlite> {
   // Reuse one connection during reloads; run the CLI with the server stopped.
-  return local.frontDeskDatabase ??= openDatabase(resolve("data/instant-front-desk"));
+  return local.frontDeskDatabase ??= openDatabase(localDatabasePath());
 }
 export async function listBusinesses(db: PGlite): Promise<Business[]> {
   return (await db.query<Business>(`SELECT business_id AS "businessId", slug, name,

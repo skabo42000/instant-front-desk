@@ -1,5 +1,4 @@
-import { resolve } from "node:path";
-import { openDatabase } from "../src/lib/db/client";
+import { localDatabasePath, openDatabase } from "../src/lib/db/client";
 import { businessRepository } from "../src/lib/db/repository";
 import { stableId } from "../src/lib/chunk";
 import { parsePublicUrl } from "../src/lib/crawl/url-policy";
@@ -11,7 +10,7 @@ export async function main(args: readonly string[]): Promise<void> {
   const url = parsePublicUrl(args[0]);
   const businessId = stableId(url.origin);
   const adapter = new FakeEmbeddings();
-  const db = await openDatabase(resolve("data/instant-front-desk"));
+  const db = await openDatabase(localDatabasePath());
   try {
     const repo = businessRepository(db, businessId);
     if (!await repo.getBusiness()) await repo.createBusiness({ slug: `site-${businessId}`, name: url.hostname,

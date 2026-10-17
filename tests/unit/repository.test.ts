@@ -44,8 +44,10 @@ describe("business-scoped PGlite repository", () => {
     expect(await businessRepository(db, B).getChunk(id(103))).not.toBeNull();
     const tables = await db.query<{ table_name: string; is_nullable: string }>(`SELECT table_name, is_nullable
       FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'business_id'`);
-    expect(tables.rows).toHaveLength(11);
-    expect(tables.rows.every(row => row.is_nullable === "NO")).toBe(true);
+    expect(tables.rows).toHaveLength(13);
+    // Only hashed global operational counters can be unscoped; business content never can.
+    expect(tables.rows.filter(row => row.is_nullable === "YES").map(row => row.table_name).sort()).toEqual(["pilot_budget", "rate_buckets"]);
+    expect(tables.rows.filter(row => !["pilot_budget", "rate_buckets"].includes(row.table_name)).every(row => row.is_nullable === "NO")).toBe(true);
     const indexes = await db.query<{ count: number }>(`SELECT count(*)::int AS count FROM pg_indexes
       WHERE schemaname = 'public' AND (indexdef ILIKE '%hnsw%' OR indexdef ILIKE '%ivfflat%')`);
     expect(indexes.rows[0].count).toBe(0);

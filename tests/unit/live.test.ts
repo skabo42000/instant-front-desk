@@ -13,7 +13,7 @@ import { ModelGateway } from "../../src/lib/models/gateway";
 import type { HttpTransport } from "../../src/lib/models/providers";
 
 const GEMINI = "synthetic-live-gemini-marker", GROQ = "synthetic-live-groq-marker";
-const env = { LIVE_OK: "yes", GEMINI_EVAL_API_KEY: GEMINI, GROQ_EVAL_API_KEY: GROQ };
+const env = { LIVE_OK: "yes", FREE_TIER_CONFIRMED: "yes", GEMINI_EVAL_API_KEY: GEMINI, GROQ_EVAL_API_KEY: GROQ };
 let db: PGlite;
 beforeAll(async () => { db = await openDatabase(); }, 60000);
 afterAll(async () => { await db?.close(); });
@@ -52,6 +52,46 @@ it("refuses without LIVE_OK before env-file access or any transport", async () =
   const readEnv = vi.fn(), transport = vi.fn();
   await expect(main(["https://fixture.example/"], { env: {}, readEnv, transport })).rejects.toThrow("LIVE_OK=yes");
   expect(readEnv).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
+});
+it("requires free-plan confirmation before reading credentials or making calls", async () => {
+  const readEnv = vi.fn(), transport = vi.fn();
+  await expect(main(["https://fixture.example/"], { env: { LIVE_OK: "yes" }, readEnv, transport })).rejects.toThrow("FREE_TIER_CONFIRMED=yes");
+  expect(readEnv).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
+});
+it("reruns the exact approved questions and snapshot without crawling or generating questions", async () => {
+  const first = fixture("frozen-regression");
+  await main([first.url, "--approve-generated"], first.dependencies);
+  const before = (await latestReport(db, first.businessId))!;
+  const second = fixture("frozen-regression");
+  await main([second.url, "--reuse-snapshot", "--question-version", String(before.questionVersion)], second.dependencies);
+  const after = (await latestReport(db, first.businessId))!;
+  expect(after.id).not.toBe(before.id);
+  expect(after.questionVersion).toBe(before.questionVersion);
+  expect(after.crawlRunId).toBe(before.crawlRunId);
+  expect(after.results.map(r => r.question)).toEqual(before.results.map(r => r.question));
+  expect(second.dependencies.crawlOptions.transport).not.toHaveBeenCalled();
+  expect(vi.mocked(second.transport).mock.calls.every(([, init]) => !String(init.body).includes("Generate 20"))).toBe(true);
+  expect(await questionRepository(db, first.businessId).list()).toHaveLength(1);
+  const report = JSON.parse(await readFile(outputPath("reports/private", `${after.id}.json`), "utf8"));
+  expect(report.questionVersion).toBe(before.questionVersion);
+  expect(report.results.filter((r: { question: { kind: string }; questionModel: string | null }) => r.question.kind === "source").every((r: { questionModel: string | null }) => r.questionModel === null)).toBe(true);
+});
+it("rejects an invalid frozen run before any website or provider call", async () => {
+  for (const args of [["--reuse-snapshot"], ["--question-version", "1"], ["--reuse-snapshot", "--question-version", "0"],
+    ["--reuse-snapshot", "--question-version", "1", "--approve-generated"]]) {
+    const f = fixture("bad-frozen-flags");
+    await expect(main([f.url, ...args], f.dependencies)).rejects.toThrow("Usage");
+    expect(f.transport).not.toHaveBeenCalled();
+  }
+  for (const approved of [false, true]) {
+    const f = fixture(`missing-frozen-${approved}`);
+    if (!approved) await main([f.url], f.dependencies);
+    vi.mocked(f.transport).mockClear(); vi.mocked(f.dependencies.crawlOptions.transport).mockClear();
+    await main([f.url, "--reuse-snapshot", "--question-version", "1"], f.dependencies);
+    expect(f.transport).not.toHaveBeenCalled(); expect(f.dependencies.crawlOptions.transport).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  }
 });
 it("loads only evaluation keys from local file and never reads widget env settings", async () => {
   expect(evalKeysFromFile('GEMINI_API_KEY=forbidden\nGROQ_API_KEY=forbidden\nLIVE_OK=yes\nGEMINI_EVAL_API_KEY="fixture-g"\nexport GROQ_EVAL_API_KEY=fixture-q # comment')).toEqual({ GEMINI_EVAL_API_KEY: "fixture-g", GROQ_EVAL_API_KEY: "fixture-q" });

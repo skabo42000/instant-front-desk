@@ -11,5 +11,12 @@
   { "heading": "How we use it", "text": "We do not sell your information or use it for ads." },
   { "heading": "Your choices", "text": "You may request deletion of your data by email." },
   { "heading": "Questions", "text": "Cost depends on your automation needs. We find a plan that fits your budget after a free strategy call." },
-  { "heading": "Contact us", "text": "Email help@example.test or call (202) 555-0199." }
+  { "heading": "Contact us", "text": "Email help@example.test or call (202) 555-0199." },
+  { "heading": "Who we help", "text": "A good fit is a business with repetitive work: clinics, repair shops, accountants and fitness studios." },
+  { "heading": "Based in Springfield", "text": "We are based in Springfield, Illinois." },
+  { "heading": "Springfield and nearby suburbs", "text": "Fairview, Oak Grove and Westfield." },
+  { "heading": "Remote, across the US", "text": "Setup and support anywhere in the United States." },
+  { "heading": "Company sizes", "text": "Small and mid-sized businesses use our services." },
+  { "heading": "Booking", "text": "Book appointments on our booking page at https://example.test/book. Appointment booking by the assistant is available only after activation." },
+  { "heading": "Privacy policy", "text": "Last updated: October 1, 2026. Our analytics tool uses anonymous counts and no advertising cookies." }
 ]

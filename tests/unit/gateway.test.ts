@@ -22,7 +22,7 @@ describe("fake-first gateway", () => {
     const gateway = new ModelGateway({ primary: provider(new FakeModel([{ ...reply, usage: { inputTokens: 12, outputTokens: 4 } }])), onLog });
     const result = await gateway.generate(request);
     expect(result.ok).toBe(true);
-    expect(result.logs[0]).toEqual({ provider: "primary", model: "scripted", attempt: 1, status: "success", latencyMs: expect.any(Number), inputTokens: 12, outputTokens: 4, estimatedCost: null });
+    expect(result.logs[0]).toEqual({ provider: "primary", model: "scripted", attempt: 1, status: "success", latencyMs: expect.any(Number), inputTokens: 12, outputTokens: 4, estimatedCost: null, priceVersion: "public-list-usd-2026-10-15" });
     expect(onLog).toHaveBeenCalledWith(result.logs[0]);
   });
   it("missing usage is null, not zero", async () => {

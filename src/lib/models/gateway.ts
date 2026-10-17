@@ -1,6 +1,7 @@
 import "server-only";
 import { FakeModel } from "./fake";
 import type { ModelAdapter, ModelReply, ModelRequest } from "../types";
+import { estimateCost, PRICE_VERSION } from "../telemetry";
 
 export interface AnswerProvider {
   provider: string;
@@ -26,7 +27,8 @@ export interface RequestLog {
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
-  estimatedCost: null;
+  estimatedCost: number | null;
+  priceVersion?: string;
   errorCode?: "FREE_TIER_EXHAUSTED";
 }
 export interface GatewayOptions {
@@ -87,7 +89,7 @@ export class ModelGateway {
           const quotaLog: RequestLog = { provider: route.provider, model: route.model,
             attempt: logs.length + 1, status: "error", latencyMs: Date.now() - started,
             inputTokens: null, outputTokens: null, estimatedCost: null, errorCode: "FREE_TIER_EXHAUSTED" };
-          this.options.onLog?.({ ...quotaLog });
+          try { this.options.onLog?.({ ...quotaLog }); } catch { /* Telemetry is observational. */ }
           return { ok: false, logs: [...logs, quotaLog] };
         }
         // Do not log provider errors: they can contain request data or credentials.
@@ -101,8 +103,10 @@ export class ModelGateway {
         inputTokens: tokens(reply?.usage?.inputTokens), outputTokens: tokens(reply?.usage?.outputTokens),
         estimatedCost: null,
       };
+      log.estimatedCost = estimateCost(log.provider, log.model, log.inputTokens, log.outputTokens);
+      log.priceVersion = PRICE_VERSION;
       logs.push(log);
-      this.options.onLog?.({ ...log });
+      try { this.options.onLog?.({ ...log }); } catch { /* Telemetry is observational. */ }
       if (status === "success" && reply) return { ok: true, reply, family: route.family, logs };
     }
     return { ok: false, logs };

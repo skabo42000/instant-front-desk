@@ -1,4 +1,5 @@
 import "server-only";
+import { createSupabaseRpc, PostgresRateLimitStore } from "./shared-controls";
 
 // One counter to check: a key (for example "client:abc") and how many hits the window allows.
 export type RateLimitEntry = { key: string; limit: number };
@@ -40,10 +41,10 @@ export class FallbackRateLimitStore implements RateLimitStore {
   }
 }
 
-// RATE_LIMIT_STORE picks the storage. Only "memory" exists so far; empty or unknown
-// values fall back to memory so a typo never takes the chat down.
+// A pilot must fail closed: a shared-store outage must not create a fresh memory allowance.
 export function createRateLimitStore(env: Record<string, string | undefined> = process.env): RateLimitStore {
   const choice = (env.RATE_LIMIT_STORE ?? "memory").trim().toLowerCase();
-  if (choice !== "memory") console.warn(`RATE_LIMIT_STORE="${choice}" is not available; using the in-memory store.`);
+  if (choice === "supabase") return new PostgresRateLimitStore(createSupabaseRpc(env));
+  if (choice !== "memory" || env.IFD_PILOT_MODE === "yes") throw new Error("A pilot requires the shared rate-limit store");
   return new MemoryRateLimitStore();
 }
