@@ -1,5 +1,21 @@
 # Local validation — October 15, 2026
 
+## Local database permissions and coordinator follow-ups — October 17, 2026
+
+Decision (Bosko, October 17): the database runs on this Mac; no Supabase or hosted database.
+`npm run check-shared-local` now creates stand-in `anon`, `authenticated` and `service_role` roles
+with Supabase-style default grants before applying db/001–008, then checks permissions. Coordinator
+live run (`data/local-postgres-proof-permissions.json`): all six checks pass. Browser roles hold no
+EXECUTE on the four `ifd_*` functions, no table privileges on the 13 tables and no CREATE on `public`.
+Real `SET ROLE anon` attempts to reserve, stop and read `pilot_budget` fail with 42501. pgvector is
+in `public`; `service_role` keeps EXECUTE. Scope: local stand-ins, not PostgREST/JWT.
+
+Answer cut-off: the model returned valid JSON containing the broken sentence, so no truncation
+happens in our code. Gemini replies whose `finishReason` is present and not `STOP` are now rejected
+as malformed. Answer prompt `grounded-cited-v8` adds: never say a deal, offer or availability is
+active now unless a source dates it. v8 has offline tests only (360 pass, 1 skip); live benchmarks
+on v8 are pending.
+
 ## Answer punctuation investigation — October 17, 2026
 
 The saved salon case in `data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json:1381`
