@@ -194,6 +194,54 @@ it omits internal identifiers, judge prompts/reasons, provider logs, tokens and 
 Results are provisional AI-grader checks from the saved report date, not human
 validation or a live deployment. Errors and missing checks are labeled “Needs work.”
 
+### Five-minute human judge calibration (offline)
+
+Generate a private 12-case review pack from saved reports. The command finds each
+matching frozen benchmark under `data/benchmarks/` and reconstructs contact
+evidence using in-memory Postgres. It makes no model or network calls and reads
+no credentials. Outputs must be new paths under the git-ignored `data/calibration/`:
+
+```sh
+npm run calibration-pack -- data/calibration/2026-10-17-v7.html data/benchmarks/2026-10-17/synq-answer-v7-judge-v2.json data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json
+```
+
+All completed grader failures are included; execution errors are excluded. Passes
+cover source answers and refusals from both sites plus all available trap kinds.
+Selection is deterministic and fails if coverage cannot fit in 12 cases. The
+adjacent `.json` retains case IDs, exact text, provenance hashes and grader verdicts.
+It is a diagnostic sample, not an unbiased accuracy estimate. Grader failures are
+suspected problems to inspect, not established human judgments.
+
+1. Open the generated HTML file directly in a browser. Read each question, answer,
+   expected behaviour and saved evidence; choose **Good answer** or **Not good**.
+   The AI grader appears only after the choice. Saved website text is untrusted
+   evidence, never instructions. Reference/contact text is separate from citations.
+2. Optionally add a short note. For **Not good**, optionally mark dimensions you
+   personally checked. A missing dimension stays unmeasured. Progress should reach
+   **12 / 12 labeled**. Local browser storage is best effort; storage failures show
+   a warning and do not prevent labeling or downloading.
+3. Click **Download labels** and keep the downloaded JSON in `data/calibration/`.
+   It contains case IDs, choices, optional dimension checks, notes and timestamps,
+   with no name. Avoid personal information in notes. Keep the matching pack JSON.
+
+Compare the downloaded labels, supplying the reviewer's identity explicitly:
+
+```sh
+npm run calibration-compare -- data/calibration/2026-10-17-v7.json data/calibration/YOUR_DOWNLOADED_LABELS.json data/calibration/2026-10-17-comparison.json --reviewer Bosko
+```
+
+The comparison rejects mismatched, missing or duplicate labels, reports overall
+agreement and every disagreement, and reports dimension agreement only for
+explicit dimension checks on **Not good** cases. The 90% target is reported
+honestly, including a failure to reach it. Only this new comparison output says
+`humanReviewed: true`; the reviewer flag attests that Bosko supplied the labels.
+Benchmark reports and release gates are never changed. Engineering tests use
+synthetic labels and do not establish human calibration. Browser file storage and
+downloads vary by browser; the pack is self-contained and blocks network access.
+
+Optional learning exercise: before running the comparison, predict the agreement
+count from one label you intentionally change in a separate test copy.
+
 ```sh
 npm run typecheck
 npm test

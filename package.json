@@ -25,6 +25,8 @@
     "vitest": "^4.0.0"
   },
   "scripts": {
+    "calibration-pack": "node --conditions=react-server scripts/run-calibration-pack.cjs pack",
+    "calibration-compare": "node --conditions=react-server scripts/run-calibration-pack.cjs compare",
     "owner-report": "node --conditions=react-server scripts/run-owner-report.cjs",
     "dev": "next dev --webpack --hostname 127.0.0.1",
     "build": "next build --webpack",
