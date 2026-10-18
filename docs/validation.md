@@ -1,5 +1,49 @@
 # Local validation — October 15, 2026
 
+## Answer prompt v8 live benchmarks — October 18, 2026
+
+Free eval keys, runbook commands, new output paths under `data/benchmarks/2026-10-18/`.
+
+| Site | v7 (Oct 17) pass all | v8 pass all | Errors | Source complete |
+| --- | --- | --- | --- | --- |
+| Synq | 24/26 | **25/26** | 0 | 19/20 |
+| Salon | 22/26 (1 error) | 20/26 | 3 | 15/20 |
+
+Gate 2 strict checks (0 errors, 0 grounding/behaviour fails, ≥18/20 complete): **not passed** on either site.
+
+- Synq's only failure is the chat-widget privacy wording (session ID "kept only in memory for this visit"
+  not stated). Raw verdict kept.
+- Salon failures:
+  - The repeat of "You can always find the most up-." A one-call diagnostic replay (`data/diag/`,
+    git-ignored) showed Gemini returns exactly this text with `finishReason=STOP` at temperature 0. It is
+    a reproducible model output, not truncation in our code.
+  - A correct answer about senior technicians was rejected because it cited 6 sections; the cap was 5
+    (the same cap existed in the live chat handler).
+  - Two grader execution errors: Groq per-minute token limits, with 25 rate waits at the 3 s case pause.
+  - Two verdicts that look strict: the deals answer now says "the website mentions that great deals are
+    currently running", which the site states, but the label expects no "currently running"; and a
+    correct off-topic refusal marked ungrounded for "I couldn't find that". Raw verdicts are not overridden.
+- Fixes (commit 6c970f1):
+  - Up to 8 citations in both the provider and the chat handler.
+  - Replies ending mid-word are rejected as malformed, so the gateway falls back.
+  - `BENCHMARK_PAUSE_MS` makes the case pause configurable.
+
+380 tests pass (1 skipped); typecheck and build pass.
+
+Salon rerun on 6c970f1 with `BENCHMARK_PAUSE_MS=20000` (`salon-answer-v8-judge-v2-run2.json`):
+- **24/26 pass all**, 0 execution errors, 0 rate waits.
+- Source complete 20/20; correct behaviour 26/26.
+- The cut-off and deals cases now pass.
+
+The two remaining failures are both "ungrounded" verdicts:
+- The standard "I couldn't find that on this business's website" refusal to an off-topic request. This
+  pattern recurs across both sites.
+- "booked **online** through Vagaro", where the question itself asks about online booking.
+
+Both look like grader strictness; raw verdicts are kept. Gate 2 stays **not passed** under the strict
+rule. Resolving these needs either human calibration (gate 3 pack ready, `data/calibration/`) or a
+deliberate judge-policy change, not more answer tuning.
+
 ## Local database permissions and coordinator follow-ups — October 17, 2026
 
 Decision (Bosko, October 17): the database runs on this Mac; no Supabase or hosted database.
