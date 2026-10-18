@@ -204,7 +204,8 @@ export async function main(args: string[]): Promise<void> {
         } }, gateway: new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model, family: providers.answer.family, adapter: providers.answer },
           fallback: { provider: "groq", model: providers.fallback.model, family: providers.fallback.family, adapter: providers.fallback }, attemptTimeoutMs: 22000, totalTimeoutMs: 65000 }),
         judge: new GroqQualityJudge(env.GROQ_EVAL_API_KEY ?? "", guard.transport, env.GROQ_MODEL, 21000),
-        pause: () => new Promise(r => setTimeout(r, 3000)), stopReason: guard.stopReason,
+        // BENCHMARK_PAUSE_MS spaces cases under Groq's free per-minute token limit (2026-10-18: 25 rate waits at 3 s).
+        pause: () => new Promise(r => setTimeout(r, Number(process.env.BENCHMARK_PAUSE_MS) || 3000)), stopReason: guard.stopReason,
         onProgress: async report => {
           await mkdir(dirname(resolve(rest[1])),{recursive:true});
           await writeFile(`${rest[1]}.partial.json`,JSON.stringify({...report,partial:true,providerAttempts:guard.callsUsed(),stopReason:guard.stopReason(),limitDetail:guard.limitDetail()},null,2),{mode:0o600});

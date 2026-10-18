@@ -78,7 +78,7 @@ export function createChatHandler(getDatabase: () => Promise<PGlite>, limiter: C
           result.logs.some(l => l.errorCode === "FREE_TIER_EXHAUSTED") ? "quota-stop" : "model-error");
       }
       // Logs and provider settings never leave the server.
-      if (result.text.length > MAX_ANSWER_LENGTH || result.citations.length > 5 ||
+      if (result.text.length > MAX_ANSWER_LENGTH || result.citations.length > 8 ||
         result.citations.some(citation => citation.pageUrl.length > 2048 || citation.heading.length > 200)) {
         event.outcome = "refusal";
         return reply({ kind: "refusal", text: "I couldn't find a short, supported answer on this website.", citations: [] }, 200, "output-limit");

@@ -97,7 +97,9 @@ function answerReply(raw: unknown): ModelReply {
   const data = object(raw);
   const citedChunkIds = list(data.citedChunkIds).map(text);
   const answerText = text(data.text);
-  if (answerText.length > 4000 || citedChunkIds.length > 5) throw new ProviderError("MALFORMED");
+  // Up to 8 citations: answers may legitimately draw on every retrieved section (2026-10-18: a correct salon answer cited 6).
+  // A reply ending mid-word ("the most up-.") is a known flash-lite output, never a complete answer.
+  if (answerText.length > 4000 || citedChunkIds.length > 8 || /\b\w+-\s*[.!?]?\s*$/.test(answerText)) throw new ProviderError("MALFORMED");
   return { text: answerText, citedChunkIds };
 }
 // Only transient failures may select another Gemini text model.

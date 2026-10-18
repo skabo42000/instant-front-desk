@@ -168,8 +168,17 @@ it("text model default and legacy overrides coexist; fallback models must be Gem
   expect(() => evaluationProviders({ ...keys, GEMINI_TEXT_FALLBACK_MODELS: "openai/gpt-oss-120b" }, async () => json({}))).toThrow();
 });
 it("Gemini replies that stopped early are rejected; a normal STOP is accepted",async()=>{
-  const reply=(finishReason:string)=>({candidates:[{finishReason,content:{parts:[{text:JSON.stringify({text:"You can always find the most up-",citedChunkIds:[]})}]}}]});
+  const reply=(finishReason:string)=>({candidates:[{finishReason,content:{parts:[{text:JSON.stringify({text:"Prices are on the booking page.",citedChunkIds:[]})}]}}]});
   for(const reason of ["MAX_TOKENS","SAFETY","RECITATION","OTHER"])
     await expect(new GeminiAnswer(KEY,async()=>json(reply(reason))).generate(request)).rejects.toMatchObject({code:"MALFORMED"});
-  await expect(new GeminiAnswer(KEY,async()=>json(reply("STOP"))).generate(request)).resolves.toMatchObject({text:"You can always find the most up-"});
+  await expect(new GeminiAnswer(KEY,async()=>json(reply("STOP"))).generate(request)).resolves.toMatchObject({text:"Prices are on the booking page."});
+});
+it("accepts up to 8 citations, rejects more, and rejects replies that end mid-word",async()=>{
+  const ids=(n:number)=>Array.from({length:n},(_,i)=>`c${i}`);
+  const run=(text:string,cited:string[])=>new GeminiAnswer(KEY,async()=>json(gemini({text,citedChunkIds:cited}))).generate(request);
+  await expect(run("Senior technicians have more than ten years of experience.",ids(6))).resolves.toMatchObject({citedChunkIds:ids(6)});
+  await expect(run("Fine.",ids(9))).rejects.toMatchObject({code:"MALFORMED"});
+  for(const cut of ["You can always find the most up-.","You can always find the most up-","See the up- "])
+    await expect(run(cut,ids(1))).rejects.toMatchObject({code:"MALFORMED"});
+  await expect(run("Our hours are 9-5.",ids(1))).resolves.toBeTruthy();
 });
