@@ -1,5 +1,27 @@
 # Local validation — October 15, 2026
 
+## Judge v3 and v3.1 (deliberate rule change) — October 18, 2026
+
+Bosko chose a less strict grader instead of human calibration. This is recorded as a **rule change**,
+not an answer improvement.
+
+**v3 (commit 07b4f19).** The app's fixed refusal sentences reached the judge as the bare marker
+`[standard scope notice]`. It backfired:
+- Synq: 22/26, down from 25/26 on v2. Salon: stopped at 18/26 on Groq's free daily limit, 12 of 18 passing.
+- The judge now failed refusals for not saying that the price or address "is not listed". The marker had
+  hidden exactly that meaning.
+
+**The grader is noisy.** The same unchanged answer was judged differently across runs. For example, the
+off-topic refusal passed on v2, then failed on v3 for offering a phone number. Single-run scores can move by
+2–3 cases either way, so one run is not a reliable pass/fail signal.
+
+**v3.1 (this commit).** The marker now states its meaning:
+- `[standard notice: the requested information is not on this business's website, and the assistant answers
+  only from that website]`.
+- The judge is told this text counts as stating what it says, but never needs a citation.
+
+381 tests pass (1 skipped); typecheck passes. The v3.1 live rerun is scheduled after Groq's daily reset.
+
 ## Answer prompt v8 live benchmarks — October 18, 2026
 
 Free eval keys, runbook commands, new output paths under `data/benchmarks/2026-10-18/`.
