@@ -81,7 +81,10 @@ export async function answer(
   const refuse = (refusalReason: RefusalReason, logs: RequestLog[] = [], answerFamily?: string): AnswerResult => {
     const contacts = [...safe, ...safeContacts].flatMap((chunk) => {
       const found = chunk.text.match(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|(?:\+1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/gi);
-      return found ? [{ chunk, contact: found.join(" or ") }] : [];
+      // Pages often repeat a number ("+1 779-234-5125" and "779-234-5125"): list each contact once.
+      const key = (value: string) => value.includes("@") ? value.toLowerCase() : value.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+      const unique = found?.filter((value, i) => found.findIndex(other => key(other) === key(value)) === i);
+      return unique ? [{ chunk, contact: unique.join(" or ") }] : [];
     });
     const contact = contacts[0];
     return {

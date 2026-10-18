@@ -175,6 +175,25 @@ retrieval does not make a refusal correct.
 
 ## Offline checks and limitations
 
+### Owner meeting report (offline)
+
+Create one self-contained HTML file from a saved answer benchmark report and its
+matching saved benchmark (which contains the business record and website snapshot):
+
+```sh
+npm run owner-report -- data/benchmarks/2026-10-17/synq-answer-v7-judge-v2.json data/owner-reports/synq-v7.html data/benchmarks/2026-10-15/synq/ai-reviewed.json
+npm run owner-report -- data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json data/owner-reports/salon-v7-run2.html data/benchmarks/2026-10-15/salon/ai-reviewed.json
+```
+
+Open the resulting file directly from disk. Inline styles support phone widths and
+light/dark preferences; no scripts, models, database, credentials or network are
+needed. Page links only open when clicked. Output paths must be new, so saved
+reports cannot be overwritten accidentally. `data/owner-reports/` is git-ignored.
+The report shows the saved business name, questions, answers and cited page links;
+it omits internal identifiers, judge prompts/reasons, provider logs, tokens and costs.
+Results are provisional AI-grader checks from the saved report date, not human
+validation or a live deployment. Errors and missing checks are labeled “Needs work.”
+
 ```sh
 npm run typecheck
 npm test
