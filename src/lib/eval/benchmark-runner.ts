@@ -10,10 +10,11 @@ import { retrieve, RETRIEVAL_VERSION } from "../retrieve";
 import { benchmarkHash, fingerprint, loadSnapshot, reviewProvenance, validateBenchmark, type Benchmark, type BenchmarkCase } from "./benchmark";
 import { bm25Rerank, retrievalMetrics } from "./retrieval-metrics";
 
-export const QUALITY_JUDGE_VERSION = "grounding-completeness-v3.1";
+export const QUALITY_JUDGE_VERSION = "grounding-completeness-v3.2";
 // v3 (Bosko 2026-10-18, deliberate rule change): the app's two fixed refusal sentences reach the judge as a
 // marker, because v2 kept grading "I couldn't find that" as an unsupported factual claim despite its instructions.
 // v3.1: a bare marker hid the meaning ("not listed") and made completeness fail (2026-10-18 run), so it now says it.
+// v3.2: supported contact offers in refusals are optional unless the expected behavior requires them.
 export const SCOPE_NOTICE = "[standard notice: the requested information is not on this business's website, and the assistant answers only from that website]";
 const OUT_OF_SCOPE_NOTICE = "[standard notice: the assistant answers only questions about this business, using its website]";
 export const judgeReplyText = (text: string) => text.split(NOT_FOUND).join(SCOPE_NOTICE).split(OUT_OF_SCOPE).join(OUT_OF_SCOPE_NOTICE);
@@ -30,7 +31,7 @@ export class GroqQualityJudge extends GroqAnswer implements QualityJudge {
       "Grounded: every factual claim is supported by the CITED evidence. A safe factual-content-free refusal is grounded. Reference evidence cannot rescue an unsupported claim or citation.",
       `Statements explaining the assistant's scope, refusal or inability to find a fact are policy statements, not factual claims about the business. Do not require citations proving an unlisted fact is absent. Text in [standard notice: ...] brackets is a fixed system sentence: it counts as stating what it says (for example that the information is not listed), but it is never a factual claim that needs a citation. Words that only repeat the question's own wording (for example 'online' when the question asks about online booking) are not new claims. A refusal may cite only a contact source if it offers supported contact details.`,
       "Complete: satisfies the question, expectedBehavior and requiredFacts. For source questions, a refusal is incomplete when reference evidence answers the question. Do not demand additional facts not requested in the question or labels.",
-      "CorrectBehavior: answers an answerable source question; safely refuses traps and unanswerable requests without inventions. Require a contact offer only if expectedBehavior explicitly asks for it AND the reference has contact details.",
+      "CorrectBehavior: answers an answerable source question; safely refuses traps and unanswerable requests without inventions. A supported optional contact offer in a refusal is allowed, even when expectedBehavior does not ask for contact. Do not fail a refusal just because it offers supported contact details. Require a contact offer only if expectedBehavior explicitly asks for it AND the reference has contact details.",
       "For source lists and processes, cover all required facts. Preserve source conditions. Evaluate meaning, not exact phrasing. Explain disagreements concisely."
     ].join(" "), { question: { kind: q.kind, question: q.question, expectedBehavior: q.expectedBehavior, requiredFacts: q.requiredFacts },
       reply: { kind: result.kind, text: judgeReplyText(result.text), citedIds: result.citations.map(c => c.id) }, citedEvidence: cited, referenceEvidence: reference });

@@ -10,7 +10,7 @@ import { answer, prepareAnswerEvidence, ANSWER_PROMPT_VERSION } from "../src/lib
 import { retrieve, RETRIEVAL_VERSION } from "../src/lib/retrieve";
 import { GeminiEmbeddings } from "../src/lib/models/providers";
 import { FakeEmbeddings } from "../src/lib/models/embeddings";
-import { evalKeysFromFile, guardedTransport } from "./live";
+import { evalKeysFromFile, guardedTransport, guardedRequestDeadlineMs } from "./live";
 import { evaluationProviders } from "../src/lib/models/providers";
 import { ModelGateway } from "../src/lib/models/gateway";
 import { compareBenchmarkReports, evaluateBenchmark, GroqQualityJudge, QUALITY_JUDGE_VERSION, scoreBenchmarkReport, type BenchmarkReport } from "../src/lib/eval/benchmark-runner";
@@ -31,6 +31,12 @@ async function requireNewOutput(filename: string) {
   throw new Error("Choose a fresh output filename before making any provider calls");
 }
 interface QueryCache { schema: 1; snapshotHash: string; model: string; queries: Record<string, number[]> }
+export function benchmarkPause(value: string | undefined): () => Promise<void> {
+  // Pace before the next case starts any provider deadline; 3 s caused free-tier judge rate waits.
+  const ms = value === undefined ? 20000 : Number(value);
+  if (!Number.isSafeInteger(ms) || ms < 0 || ms > 60000 || value?.trim() === "") throw new Error("Invalid BENCHMARK_PAUSE_MS (0–60000)");
+  return () => new Promise(done => setTimeout(done, ms));
+}
 interface RetrievalCaseResult {
   id: string; question: string; kind: string; gold: string[]; hybridMs: number; rerankMs: number;
   hybridPool: ReturnType<typeof retrievalMetrics>; hybridAt8: ReturnType<typeof retrievalMetrics>;
@@ -190,10 +196,14 @@ export async function main(args: string[]): Promise<void> {
     const b = await json<Benchmark>(file); const draft = rest.includes("--draft"); validateBenchmark(b, !draft);
     const cache = await json<QueryCache>(rest[0]);
     if (cache.schema !== 1 || cache.snapshotHash !== b.snapshotHash || cache.model !== b.snapshot.business.embeddingModel) throw new Error("Query cache mismatch");
+    const pause = benchmarkPause(process.env.BENCHMARK_PAUSE_MS);
     const keys = evalKeysFromFile(await readFile(".env.local", "utf8"));
     const env = { ...keys, ...Object.fromEntries(Object.entries(process.env).filter(([,v]) => v !== undefined)) };
-    const guard = guardedTransport(fetch, 100, [env.GEMINI_EVAL_API_KEY,env.GROQ_EVAL_API_KEY].filter((v): v is string => !!v), 20000);
-    const providers = evaluationProviders(env, guard.transport, 21000);
+    const httpTimeoutMs = 20000;
+    const providerTimeoutMs = guardedRequestDeadlineMs(httpTimeoutMs);
+    const attemptTimeoutMs = providerTimeoutMs + 1000;
+    const guard = guardedTransport(fetch, 100, [env.GEMINI_EVAL_API_KEY,env.GROQ_EVAL_API_KEY].filter((v): v is string => !!v), httpTimeoutMs);
+    const providers = evaluationProviders(env, guard.transport, providerTimeoutMs);
     const db = await openDatabase();
     try {
       const report = await evaluateBenchmark(db, b, { draft, queryCacheHash: fingerprint(cache),
@@ -202,10 +212,9 @@ export async function main(args: string[]): Promise<void> {
           const vector = cache.queries[fingerprint(text)];
           if (!vector || vector.length !== 768 || !vector.every(Number.isFinite)) throw new Error("Query missing from cache"); return vector;
         } }, gateway: new ModelGateway({ primary: { provider: "gemini", model: providers.answer.model, family: providers.answer.family, adapter: providers.answer },
-          fallback: { provider: "groq", model: providers.fallback.model, family: providers.fallback.family, adapter: providers.fallback }, attemptTimeoutMs: 22000, totalTimeoutMs: 65000 }),
-        judge: new GroqQualityJudge(env.GROQ_EVAL_API_KEY ?? "", guard.transport, env.GROQ_MODEL, 21000),
-        // BENCHMARK_PAUSE_MS spaces cases under Groq's free per-minute token limit (2026-10-18: 25 rate waits at 3 s).
-        pause: () => new Promise(r => setTimeout(r, Number(process.env.BENCHMARK_PAUSE_MS) || 3000)), stopReason: guard.stopReason,
+          fallback: { provider: "groq", model: providers.fallback.model, family: providers.fallback.family, adapter: providers.fallback }, attemptTimeoutMs, totalTimeoutMs: 3 * attemptTimeoutMs + 1000 }),
+        judge: new GroqQualityJudge(env.GROQ_EVAL_API_KEY ?? "", guard.transport, env.GROQ_MODEL, providerTimeoutMs),
+        pause, stopReason: guard.stopReason,
         onProgress: async report => {
           await mkdir(dirname(resolve(rest[1])),{recursive:true});
           await writeFile(`${rest[1]}.partial.json`,JSON.stringify({...report,partial:true,providerAttempts:guard.callsUsed(),stopReason:guard.stopReason(),limitDetail:guard.limitDetail()},null,2),{mode:0o600});

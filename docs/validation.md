@@ -1,5 +1,57 @@
 # Local validation — October 15, 2026
 
+## Salon gate-2 fixes and judge v3.2 clarification — October 18, 2026
+
+Offline implementation follows diagnosis
+`../ai-os/runs/task-1792381748972-50d6ba/result.json`, using salon cases
+`9aeb5744-e433-4d5c-96fc-7b28b540d992` (deals) and
+`4da503ec-683f-44f3-b6cf-64f127bc9678` (private address) in
+`data/benchmarks/2026-10-18/salon-answer-v8-judge-v3.1.json` and the passing
+deals wording in `salon-answer-v8-judge-v2-run2.json` in that same directory.
+
+- Answer version `grounded-cited-v8.1` adds a narrow post-check for active
+  promotion wording, including attributed “the website mentions ... currently
+  running”. It rewrites the known form as “The website mentioned ...”, preserving
+  the technician/service details and existing booking direction. It adds booking
+  directions only when the cited evidence supports them; other detected active
+  claim forms safely refuse. Unrelated and already safe text is unchanged,
+  including the exact passing v2-run2 answer. Saved promotion dates alone do not
+  prove current availability; matched claims are conservatively historical.
+  This is a narrow regression guard, not a general semantic fact checker.
+- **Judge `grounding-completeness-v3.2` is a deliberate rule clarification,
+  not an answer improvement.** A supported optional contact offer in a refusal
+  is allowed even when the expected behavior does not request contact. Contact
+  is required only when `expectedBehavior` asks for it and reference evidence
+  supplies it. Unsupported contacts still fail grounding. Scope markers and
+  answer/refusal generation remain unchanged by this policy clarification.
+  Offline tests verify the serialized policy and evidence contract; they do
+  not establish how a live model will grade it or human calibration.
+- Benchmark pacing defaults to `BENCHMARK_PAUSE_MS=20000`, before provider
+  deadlines start. The 20-second HTTP timeout is unchanged. Adapter/judge
+  deadlines now budget for all five possible HTTP attempts, three documented
+  waits of up to 61 seconds, one 1-second retry pause and 1-second grace:
+  **285000 ms**. Gateway attempt/total deadlines cover that envelope too
+  (286000/859000 ms). These remain bounded; daily/unknown quota stops, three-wait
+  limit and 100-attempt cap are unchanged. Fake timers test three 61-second
+  waits plus a transient retry and slow responses through the real guard/judge.
+
+The [gate-2 runbook](pilot-gate-2-runbook.md#salon-rerun-after-the-offline-fixes--october-18-2026)
+contains the exact paced salon rerun command. No live/model calls were made;
+salon gate-2 passage remains unverified until a fresh complete run. Original
+reports are preserved. Judge versions cannot be compared as answer-only gains.
+
+Actual checks for this bounded implementation:
+
+- `TMPDIR="$PWD/data/test-tmp" npm test`: **414 passed, 1 skipped, 40 files
+  passed** (415 collected). The existing skipped case tests Windows child-process
+  cleanup; this run was on macOS. Existing unrelated answer tests were unchanged.
+- `npm run typecheck`: passed (`tsc --noEmit`).
+- `NEXT_TELEMETRY_DISABLED=1 TMPDIR="$PWD/data/test-tmp" npm run build`: passed,
+  including compilation, TypeScript, all four static pages and build tracing.
+- Focused promotion/judge/pacing regressions passed before the full suite.
+  No new dependencies, credentials inspection, live calls, commits, pushes or
+  deployments. Existing unrelated workspace edits were preserved.
+
 ## Judge v3 and v3.1 (deliberate rule change) — October 18, 2026
 
 Bosko chose a less strict grader instead of human calibration. This is recorded as a **rule change**,

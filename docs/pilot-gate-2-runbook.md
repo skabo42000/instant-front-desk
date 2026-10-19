@@ -102,6 +102,36 @@ is required for this gate.
 
 ## Provider call budget and stop behavior
 
+### Salon rerun after the offline fixes — October 18, 2026
+
+This command is prepared for the coordinator's separately authorized free-only
+session; it was **not executed** by the offline implementation worker. Verify
+current free quota/billing settings first and stop the local server. Use the
+unchanged accepted salon bundle and query cache. Answer version is now
+`grounded-cited-v8.1`; judge `grounding-completeness-v3.2` deliberately clarifies
+optional contact offers (a judge rule clarification, not an answer improvement).
+
+```sh
+LIVE_OK=yes FREE_TIER_CONFIRMED=yes BENCHMARK_PAUSE_MS=20000 GEMINI_ANSWER_MODEL=gemini-3.5-flash-lite GEMINI_TEXT_MODEL=gemini-3.5-flash-lite GEMINI_TEXT_FALLBACK_MODELS= GROQ_MODEL=openai/gpt-oss-120b npm run benchmark -- answer data/benchmarks/salon-accepted.json data/benchmarks/salon-reviewed-queries.json data/benchmarks/2026-10-18/salon-answer-v8.1-judge-v3.2.json
+```
+
+The CLI refuses an existing final or `.partial.json` path; choose a fresh name
+if either exists. Preserve the original v3.1 and v2-run2 reports. Apply the full
+gate checks from steps 2 and 4 above: 26 completed, no partial/stop, zero errors,
+zero grounding/behavior failures, at least 18/20 complete source answers. Do not
+splice targeted diagnostics into a complete-run claim. AI review remains
+provisional; passing numerical gate 2 does not authorize release.
+
+The benchmark now defaults to a 20000 ms case pause. Its adapter/judge deadline
+is 285000 ms, covering the guard's five possible 20-second HTTP attempts, three
+61-second minute waits, a 1-second transient retry pause and 1-second grace.
+Gateway attempt/total limits are 286000/859000 ms. Actual HTTP attempts still
+time out at 20 seconds; persistent/daily/unknown limits and the 100-call cap
+still stop work. This timing update supersedes the historical deadline and
+20-second Retry-After notes below: the current guard permits numeric
+Retry-After up to **60 seconds**, adding one second per wait, at most three
+waits per adapter request. It does not guarantee future free-tier capacity.
+
 Counts apply independently to **each site**, under the pinned configuration:
 
 | Stage | Expected successful first-attempt calls |

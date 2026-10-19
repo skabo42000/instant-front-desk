@@ -39,6 +39,10 @@ export function redact(value: string, keys: readonly string[]): string {
 }
 const MAX_RATE_WAITS = 3;
 const MAX_RATE_WAIT_SECONDS = 60; // a per-minute window never needs a longer wait (2026-10-17: Groq TPM asked for 24 s)
+// Two HTTP attempts plus three rate-limit responses/waits, one transient retry pause, then adapter grace.
+export function guardedRequestDeadlineMs(httpTimeoutMs: number): number {
+  return (2 + MAX_RATE_WAITS) * httpTimeoutMs + MAX_RATE_WAITS * (MAX_RATE_WAIT_SECONDS + 1) * 1000 + 1000 + 1000;
+}
 export function guardedTransport(transport: HttpTransport, maxCalls: number, keys: readonly string[], timeoutMs = 5000,
   sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms))) {
   if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error(USAGE);

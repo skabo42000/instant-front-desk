@@ -4,7 +4,7 @@ import { NOT_FOUND, OUT_OF_SCOPE } from "../../src/lib/answer";
 import type { BenchmarkCase } from "../../src/lib/eval/benchmark";
 
 it("judge v3 sees the fixed refusal sentences as a marker, keeping every other word", async () => {
-  expect(QUALITY_JUDGE_VERSION).toBe("grounding-completeness-v3.1");
+  expect(QUALITY_JUDGE_VERSION).toBe("grounding-completeness-v3.2");
   const text = `${NOT_FOUND} You can contact the business at +1 779-234-5125.`;
   expect(judgeReplyText(text)).toBe(`${SCOPE_NOTICE} You can contact the business at +1 779-234-5125.`);
   expect(judgeReplyText(OUT_OF_SCOPE)).toContain("answers only questions about this business");

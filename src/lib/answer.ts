@@ -15,8 +15,8 @@ export interface AnswerResult {
   refusalReason?: RefusalReason;
 }
 export type RefusalReason = "invalid-input" | "out-of-scope" | "no-relevant-section" | "model-error" | "model-found-nothing" |
-  "missing-citation-ids" | "unknown-citation-ids" | "unsupported-number" | "leaked-instructions";
-export const ANSWER_PROMPT_VERSION = "grounded-cited-v8";
+  "missing-citation-ids" | "unknown-citation-ids" | "unsupported-number" | "unsupported-promotion" | "leaked-instructions";
+export const ANSWER_PROMPT_VERSION = "grounded-cited-v8.1";
 export const NOT_FOUND = "I couldn't find that on this business's website, and I can only answer questions from it.";
 export const OUT_OF_SCOPE = "I can only answer questions about this business, using its website.";
 
@@ -42,6 +42,21 @@ function topic(question: string): RegExp | undefined {
 }
 // Every number, price, time or phone digit group in an answer must appear in the cited website text.
 const numbers = (text: string) => text.match(/\d+(?:[.:,]\d+)*/g) ?? [];
+// A saved page cannot establish that a promotion is still active. Keep its details as a historical mention.
+function promotionPostCheck(text: string, cited: readonly RetrievedChunk[]): string | null {
+  const promotion = /\b(?:deals?|offers?|promotions?|discounts?|specials?)\b/i;
+  const active = /\b(?:deals?|offers?|promotions?|discounts?|specials?)\s+(?:are|is)\s+(?:(?:currently|now|still)\s+)?(?:running|active|available)\b|\b(?:currently|now|still)\s+(?:running|offering)\b[^.!?\n]{0,100}\b(?:deals?|offers?|promotions?|discounts?|specials?)\b/i;
+  if (!active.test(text)) return text;
+  if (!cited.some(chunk => promotion.test(chunk.text))) return null;
+  // Preserve service/technician details in the known failure; other active-claim forms safely refuse.
+  const rewritten = text.replace(/([^.!?\n]*?)\b((?:great\s+|special\s+)?(?:deals?|offers?|promotions?|discounts?|specials?))\s+(?:are|is)\s+(?:(?:currently|now|still)\s+)?(?:running|active|available)\b(?:\s+(?:right\s+)?now\b)?/gi,
+    (match, prefix: string, subject: string) => /\b(?:no|not|never|if|whether)\b/i.test(prefix) ? match :
+      `${prefix.match(/^\s*/)?.[0] ?? ""}The website mentioned ${subject.toLowerCase()}`)
+    .replace(/^\s*Yes[!,]?\s*/i, "").trim();
+  if (active.test(rewritten)) return null;
+  const booking = cited.some(chunk => /\bbooking page\b/i.test(chunk.text));
+  return rewritten + (booking && !/\bbooking page\b/i.test(rewritten) ? " Check the booking page for current prices and deals." : "");
+}
 const domainOf = (pageUrl: string) => {
   try { return new URL(pageUrl).hostname.toLowerCase().replace(/[^a-z0-9]/g, ""); } catch { return ""; }
 };
@@ -114,8 +129,10 @@ export async function answer(
   // List markers ("1. Talk", "2) Plan") are formatting, not facts.
   const withoutListMarkers = reply.text.replace(/^\s*\d{1,2}[.)]\s+/gm, "");
   if (numbers(withoutListMarkers).some((value) => !citedNumbers.has(value))) return refuse("unsupported-number", result.logs, result.family);
+  const checkedText = promotionPostCheck(reply.text.trim(), cited as RetrievedChunk[]);
+  if (checkedText === null) return refuse("unsupported-promotion", result.logs, result.family);
   return {
-    kind: "answer", text: reply.text.trim(), answerFamily: result.family, logs: result.logs,
+    kind: "answer", text: checkedText, answerFamily: result.family, logs: result.logs,
     citations: [...new Set(reply.citedChunkIds)].map((id) => {
       const chunk = relevant.find((source) => source.id === id)!;
       return { id, pageUrl: chunk.pageUrl, heading: chunk.heading };
