@@ -1,6 +1,23 @@
 // Heading cues are generic website labels, never IDs from evaluation answers.
 const SERVICE_OVERVIEW = /\b(?:what|which)\s+(?:services|treatments)\b|\bservices\s+(?:do|does)\b|\bwhat\s+(?:do|does)\s+.{0,40}\b(?:offer|do)\b/i;
 export function isServiceOverview(question: string): boolean { return SERVICE_OVERVIEW.test(question); }
+const BUSINESS_OVERVIEW = /\b(?:summari[sz]e|summary|overview)\b|\btell me about\s+(?:(?:this|the|your)\s+(?:business|company|salon)|you)\s*[?!.]*$|\bwhat is\s+(?:this|the|your)\s+(?:business|company|salon)\s*[?!.]*$|\b(?:what do you do|who are you|o cemu se radi|sta radite|sto radite|ko ste|tko ste)\s*[?!.]*$/i;
+const folded = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "");
+export function isBusinessOverview(question: string): boolean { return BUSINESS_OVERVIEW.test(folded(question.trim())); }
+export function asksAboutLegalInformation(question: string): boolean {
+  return /\b(?:privacy|terms|data|cookies?|polic(?:y|ies)|legal|privatnost|uslovi|uvjeti|podaci|podatke|kolacici)\b/i.test(folded(question));
+}
+export function isLegalSource(source: { pageUrl: string; heading: string }): boolean {
+  const legal = /(?:^|[^a-z])(?:privacy|terms|cookies?|legal|polic(?:y|ies)|gdpr|disclaimer|privatnost|uslovi|uvjeti|kolacici)(?:[^a-z]|$)/i;
+  try { return legal.test(folded(decodeURIComponent(new URL(source.pageUrl).pathname))) || legal.test(folded(source.heading)); }
+  catch { return true; }
+}
+
+export const BUSINESS_OVERVIEW_HEADINGS = [
+  "about|our story|who we are|o nama|ko smo|tko smo",
+  "services|products|what we (do|offer)|our (work|offerings)|usluge|proizvodi|sta radimo|što radimo",
+  "contact|book(ing)?|locations?|service areas?|where we (are|work)|kontakt|zakazivanje|narucivanje",
+];
 const HEADINGS: [RegExp, string][] = [
   [/technical|tech.{0,12}skills|coding|programming/i, "questions|faq|frequently asked"],
   [/\b(?:launch|go live|goes live)\b/i, "timeline|timing|how long|^build$|launch"],

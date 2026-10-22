@@ -3,7 +3,7 @@ import type { RetrievedChunk } from "./answer";
 import type { businessRepository } from "./db/repository";
 import { EMBEDDING_DIMENSIONS } from "./db/client";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
-import { headingPatterns, isServiceOverview } from "./question-intents";
+import { asksAboutLegalInformation, BUSINESS_OVERVIEW_HEADINGS, headingPatterns, isBusinessOverview, isLegalSource, isServiceOverview } from "./question-intents";
 
 export type Repository = Pick<ReturnType<typeof businessRepository>, "getBusiness" | "listPageTexts" | "searchChunks" |
   "searchChunksByPattern" | "searchChunksByHeading" | "listHomepageSummary">;
@@ -75,6 +75,37 @@ export function phrasePatterns(question: string): string[] {
 }
 // A phrase found in this many sections or more (for example the business name) points nowhere.
 const COMMON_PHRASE_HITS = 4;
+const MAX_BUSINESS_OVERVIEW_CHUNKS = 8; // The existing heading-evidence allowance.
+
+async function businessOverviewEvidence(question: string, repo: Repository, model: string): Promise<RetrievedChunk[]> {
+  const business = (await repo.getBusiness())!;
+  const home = new URL(business.sourceUrl);
+  const onHomepage = (pageUrl: string) => {
+    const page = new URL(pageUrl);
+    return page.origin === home.origin && page.pathname.replace(/\/$/, "") === home.pathname.replace(/\/$/, "");
+  };
+  const allowed = (chunk: RetrievedChunk) => !!chunk.text.trim() && (asksAboutLegalInformation(question) || !isLegalSource(chunk));
+  // Heading reads are business/model scoped and ordered by page URL, then chunk ordinal.
+  // The site's root sorts before its child pages; include short leading chunks too.
+  const leading = (await repo.searchChunksByHeading(".*", model, 20)).filter(hit => onHomepage(hit.pageUrl) && allowed(hit));
+  const groups = [];
+  for (const pattern of BUSINESS_OVERVIEW_HEADINGS) {
+    groups.push((await repo.searchChunksByHeading(pattern, model, 20)).filter(hit => !onHomepage(hit.pageUrl) && allowed(hit)));
+  }
+  const details = [];
+  // Give about, service and contact/location sections a turn before taking continuations.
+  for (let index = 0; index < MAX_BUSINESS_OVERVIEW_CHUNKS; index++) {
+    for (const group of groups) if (group[index]) details.push(group[index]);
+  }
+  const seen = new Set<string>();
+  const uniqueDetails = details.filter(hit => !seen.has(hit.id) && !!seen.add(hit.id));
+  const homeLimit = MAX_BUSINESS_OVERVIEW_CHUNKS - Math.min(4, uniqueDetails.length);
+  seen.clear();
+  return [...leading.slice(0, homeLimit), ...uniqueDetails]
+    .filter(hit => !seen.has(hit.id) && !!seen.add(hit.id)).slice(0, MAX_BUSINESS_OVERVIEW_CHUNKS)
+    .map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
+}
+
 export async function retrieve(question: string, repo: Repository,
   options: { adapter?: EmbeddingAdapter; topK?: number; maxDistance?: number } = {},
 ): Promise<RetrievalResult> {
@@ -85,11 +116,17 @@ export async function retrieve(question: string, repo: Repository,
   // Euclidean distance on normalized fake vectors; real models need calibration.
   const maxDistance = options.maxDistance ?? 1.25;
   if (!Number.isFinite(maxDistance) || maxDistance < 0) throw new Error("Invalid distance threshold");
-  const contacts = extractContacts(await repo.listPageTexts());
+  const overview = isBusinessOverview(question);
+  const allowed = (source: { pageUrl: string; heading: string }) => !overview || asksAboutLegalInformation(question) || !isLegalSource(source);
+  const contacts = extractContacts((await repo.listPageTexts()).filter(page => allowed({ ...page, heading: "" })));
   // Separate fallback evidence prevents contact sections from crowding out answer sections.
   const contactChunks = (await repo.searchChunksByPattern(
-    "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}|\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}", adapter.model, 3,
-  )).map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
+    "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}|\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}", adapter.model, overview ? 20 : 3,
+  )).filter(allowed).slice(0, 3).map(({ id, pageUrl, heading, text }) => ({ id, pageUrl, heading, text }));
+  if (overview) {
+    const chunks = await businessOverviewEvidence(question, repo, adapter.model);
+    return { status: chunks.length ? "evidence" : "insufficient evidence", chunks, contacts, contactChunks };
+  }
   const embedding = await adapter.embed(question);
   if (embedding.length !== adapter.dimensions || !embedding.every(Number.isFinite)) throw new Error("Invalid embedding dimension/values");
   const hits = question.trim() && embedding.some(value => value !== 0)
