@@ -46,6 +46,7 @@ describe("offline ingestion", () => {
     const first = await ingest("https://bright.test/", repo, options);
     const before = (await db.query("SELECT id,content_hash,embedding_model,embedding_dimensions FROM chunks ORDER BY id")).rows;
     expect(first).toMatchObject({ pages: 2, chunks: 3, embeddingDimensions: 768 });
+    expect(Object.keys(first).sort()).toEqual(["chunks", "embeddingDimensions", "embeddingModel", "pages"]);
     expect(await ingest("https://bright.test/", repo, options)).toEqual(first);
     expect((await db.query("SELECT id,content_hash,embedding_model,embedding_dimensions FROM chunks ORDER BY id")).rows).toEqual(before);
     expect((await db.query<{ count: number }>("SELECT count(*)::int AS count FROM pages")).rows[0].count).toBe(2);
@@ -76,5 +77,19 @@ describe("offline ingestion", () => {
     expect(chunks).toEqual([{ text: "Monday, 9 AM to 5 PM.", embedding_dimensions: 768 }]);
     await expect(db.query("UPDATE chunks SET embedding_dimensions=3")).rejects.toMatchObject({ code: "23514" });
     await expect(db.query("UPDATE businesses SET embedding_dimensions=3")).rejects.toMatchObject({ code: "23514" });
+  });
+  it.each(["http", "redirect", "network", "page-cap"])("default CLI/eval-style ingestion still rejects %s partial snapshots without replacing good data", async kind => {
+    const repo = businessRepository(db, A); const before = await repo.listPageTexts();
+    const options = fixtureCrawl("bright-salon");
+    if (kind === "page-cap") options.limits = { maxPages: 1 };
+    options.transport = async ({ url }) => {
+      if (url.pathname === "/bad" && kind === "network") throw Error("Fixture offline");
+      const robots = url.pathname === "/robots.txt";
+      const status = robots ? 404 : url.pathname === "/bad" ? kind === "redirect" ? 302 : 404 : 200;
+      return { status, headers: { "content-type": "text/html", ...(status === 302 ? { location: "https://other.test/" } : {}) },
+        body: (async function* () { yield Buffer.from('<h1>New data</h1><p>Must not replace saved data.</p><a href="/bad">Page</a>'); })(), destroy() {} };
+    };
+    await expect(ingest("https://bright.test/", repo, { crawlOptions: options })).rejects.toThrow("Crawl incomplete");
+    expect(await repo.listPageTexts()).toEqual(before);
   });
 });

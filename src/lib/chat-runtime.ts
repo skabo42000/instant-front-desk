@@ -1,7 +1,7 @@
 import "server-only";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
 import { ModelGateway } from "./models/gateway";
-import { evaluationProviders, ProviderError, type HttpTransport } from "./models/providers";
+import { embeddingBatches, evaluationProviders, GeminiEmbeddings, ProviderError, type HttpTransport } from "./models/providers";
 import { PostgresProviderBudget, type ProviderBudget } from "./shared-controls";
 import { createPilotRpc } from "./pilot-rpc";
 import { homedir } from "node:os";
@@ -25,6 +25,7 @@ export function createChatRuntime(env: Environment = process.env,
   let calls = 0;
   let stopped = false;
   let pendingReservations = 0;
+  let heldWebsiteCalls = 0;
   let lastStopAttempt = -Infinity;
   let stopInFlight: Promise<void> | undefined;
   const persistStop = (): Promise<void> => {
@@ -49,19 +50,20 @@ export function createChatRuntime(env: Environment = process.env,
       const maxCalls = Number(env.LOCAL_CHAT_MAX_CALLS ?? 60);
       if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 300) throw new Error("LOCAL_CHAT_MAX_CALLS must be 1 to 300.");
       const keys = [env.GEMINI_EVAL_API_KEY, env.GROQ_EVAL_API_KEY].filter((key): key is string => !!key);
-      const guarded: HttpTransport = async (url, init) => {
-        if (stopped || calls >= maxCalls) {
-          stopped = true;
-          return refuseStopped();
-        }
+      const guarded = async (url: string, init: RequestInit, lease?: { remaining: number }): Promise<Response> => {
+        if (stopped) return refuseStopped();
+        if (calls >= maxCalls) throw new ProviderError("LOCAL_CALL_LIMIT");
         if (init.signal?.aborted) throw new ProviderError("TIMEOUT");
         // Pending slots prevent concurrent overshoot without charging failed DB calls.
-        if (calls + pendingReservations >= maxCalls) throw new ProviderError("HTTP_ERROR");
+        if (lease) {
+          if (lease.remaining < 1) throw new ProviderError("LOCAL_CALL_LIMIT");
+          lease.remaining--; heldWebsiteCalls--;
+        } else if (calls + pendingReservations + heldWebsiteCalls >= maxCalls) throw new ProviderError("LOCAL_CALL_LIMIT");
         pendingReservations++;
         try {
           if (budget && !await budget.reserve(maxCalls)) {
-            stopped = true;
-            return refuseStopped();
+            // An exhausted/shared-stopped budget refuses calls, but isn't a new provider quota event.
+            throw new ProviderError("FREE_TIER_EXHAUSTED");
           }
           calls++;
         } finally { pendingReservations--; }
@@ -85,7 +87,23 @@ export function createChatRuntime(env: Environment = process.env,
         return new Response(raw, { status: response.status, headers: response.headers });
       };
       const providers = evaluationProviders(env, guarded, 15000);
-      real = { mode: "real", embeddings: providers.embeddings, gateway: new ModelGateway({
+      const embeddings: EmbeddingAdapter = {
+        model: providers.embeddings.model, dimensions: providers.embeddings.dimensions,
+        embed: input => providers.embeddings.embed(input),
+        async embedMany(inputs) {
+          const needed = embeddingBatches(inputs, this.model, this.dimensions).length;
+          if (stopped) return refuseStopped();
+          // Hold the complete load's slots synchronously, before its first provider/budget call.
+          if (needed > maxCalls - calls - pendingReservations - heldWebsiteCalls) throw new ProviderError("LOCAL_CALL_LIMIT");
+          const lease = { remaining: needed };
+          heldWebsiteCalls += needed;
+          try {
+            return await new GeminiEmbeddings(env.GEMINI_EVAL_API_KEY ?? "", (url, init) => guarded(url, init, lease),
+              this.model, 15000).embedMany(inputs);
+          } finally { heldWebsiteCalls -= lease.remaining; }
+        },
+      };
+      real = { mode: "real", embeddings, gateway: new ModelGateway({
         primary: { provider: "gemini", model: providers.answer.model, family: providers.answer.family, adapter: providers.answer },
         fallback: { provider: "groq", model: providers.fallback.model, family: providers.fallback.family, adapter: providers.fallback },
         attemptTimeoutMs: 16000, totalTimeoutMs: 45000,

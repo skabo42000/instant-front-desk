@@ -1,8 +1,13 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { pilotConfigurationIssues } from "./lib/pilot-policy";
+import { localIngestRequestAllowed } from "./lib/local-ingest-policy";
 
 export function proxy(request: NextRequest) {
+  // This local tool is absent even before the pilot invitation/configuration checks.
+  if (request.nextUrl.pathname === "/api/ingest" && !localIngestRequestAllowed(request)) {
+    return new NextResponse("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+  }
   if (process.env.IFD_PILOT_MODE !== "yes" || request.nextUrl.pathname === "/api/health") return NextResponse.next();
   const deny = (text: string, status: number, reason: string, headers: Record<string,string> = {}) => {
     const requestId = randomUUID();

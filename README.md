@@ -65,6 +65,13 @@ Open http://127.0.0.1:3000. The home page lists saved businesses. Each
 The server binds to this machine. No public ingestion, question-editing or
 administration endpoints exist.
 
+October 22 local UI addition: in free-only real chat mode, use **Add a website**
+on the loopback home page to load an approved public site and open its chat.
+The form uses the existing safe crawler and chat-compatible Gemini 768-dimensional
+embeddings inside the server, with one load at a time and the shared free-call cap.
+It is unavailable in pilot/token-configured environments or on non-loopback hosts.
+See [browser loading, configuration and limits](docs/ingestion.md).
+
 Stop the server with Ctrl+C before any database CLI command. The CLI and server
 share `data/instant-front-desk`; PGlite supports only one process here.
 

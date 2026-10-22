@@ -81,7 +81,7 @@ describe("local real chat, with fake HTTP only", () => {
     expect(http).not.toHaveBeenCalled();
     reserve.mockResolvedValue(true);
     await expect(services.embeddings.embed("hours")).resolves.toHaveLength(768);
-    await expect(services.embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+    await expect(services.embeddings.embed("hours")).rejects.toMatchObject({ code: "LOCAL_CALL_LIMIT" });
     expect(http).toHaveBeenCalledTimes(1);
     expect(reserve).toHaveBeenCalledTimes(3);
   });
@@ -89,7 +89,8 @@ describe("local real chat, with fake HTTP only", () => {
     const http = transport();
     const runtime = createChatRuntime(env, http, { reserve: vi.fn().mockResolvedValue(false), stop: vi.fn().mockResolvedValue(undefined) });
     await expect(runtime(model).embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
-    expect(() => runtime(model)).toThrow("FREE_TIER_EXHAUSTED");
+    await expect(runtime(model).embeddings.embed("hours")).rejects.toMatchObject({ code: "FREE_TIER_EXHAUSTED" });
+    expect(() => runtime(model)).not.toThrow();
     expect(http).not.toHaveBeenCalled();
   });
   it("defaults to offline mode and never uses real keys for fake businesses", () => {

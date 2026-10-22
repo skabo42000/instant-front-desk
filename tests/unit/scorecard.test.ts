@@ -11,5 +11,5 @@ it("renders exact score, every failure and execution error",()=>{
   ]} as EvalReport;
   const html=renderToStaticMarkup(createElement(ScoreCard,{report}));
   for(const expected of ["1/3", "Failed question","Unsupported","Wrong answer","Crashed question","Execution error: ANSWER_EXECUTION_ERROR"]) expect(html).toContain(expected);
-  expect(renderToStaticMarkup(createElement(ScoreCard))).toContain("No checks have been run");
+  expect(renderToStaticMarkup(createElement(ScoreCard))).toContain("No quality test yet for this site");
 });

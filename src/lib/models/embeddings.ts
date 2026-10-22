@@ -6,6 +6,7 @@ export interface EmbeddingAdapter {
   readonly model: string;
   readonly dimensions: number;
   embed(text: string): Promise<readonly number[]>;
+  embedMany?(texts: readonly string[]): Promise<readonly (readonly number[])[]>;
 }
 const stopWords = new Set("a an the is are do does what when where how can i you your of for to and me please tell about".split(" "));
 

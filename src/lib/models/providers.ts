@@ -10,7 +10,7 @@ import { assertIndependentJudge } from "./gateway";
 // Pass fetch explicitly only in a separately authorized live session. No default network transport.
 export type HttpTransport = (url: string, init: RequestInit) => Promise<Response>;
 export class ProviderError extends Error {
-  constructor(readonly code: "MALFORMED" | "HTTP_ERROR" | "TIMEOUT" | "FREE_TIER_EXHAUSTED", readonly status?: number) {
+  constructor(readonly code: "MALFORMED" | "HTTP_ERROR" | "TIMEOUT" | "FREE_TIER_EXHAUSTED" | "LOCAL_CALL_LIMIT", readonly status?: number) {
     super(code);
     this.name = code === "FREE_TIER_EXHAUSTED" ? "FreeTierExhausted" : "ProviderError";
   }
@@ -142,6 +142,31 @@ export class GeminiAnswer implements ModelAdapter {
     return result;
   }
 }
+export const MAX_EMBEDDING_BATCH_TEXTS = 100;
+export const MAX_EMBEDDING_BATCH_BYTES = 1024 * 1024;
+
+function embeddingRequest(input: string, model: string, dimensions: number) {
+  // Preserve the existing unspecified task type for both saved text and chat queries.
+  return { model: `models/${model}`, content: { parts: [{ text: input }] }, outputDimensionality: dimensions };
+}
+
+export function embeddingBatches(inputs: readonly string[], model = "gemini-embedding-001", dimensions = 768): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let bytes = Buffer.byteLength('{"requests":[]}');
+  for (const input of inputs) {
+    const size = Buffer.byteLength(JSON.stringify(embeddingRequest(input, model, dimensions)));
+    if (size + Buffer.byteLength('{"requests":[]}') > MAX_EMBEDDING_BATCH_BYTES) throw new ProviderError("MALFORMED");
+    if (batch.length && (batch.length === MAX_EMBEDDING_BATCH_TEXTS || bytes + 1 + size > MAX_EMBEDDING_BATCH_BYTES)) {
+      batches.push(batch); batch = []; bytes = Buffer.byteLength('{"requests":[]}');
+    }
+    bytes += size + (batch.length ? 1 : 0);
+    batch.push(input);
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 export class GeminiEmbeddings implements EmbeddingAdapter {
   readonly dimensions = 768;
   private readonly client: Client;
@@ -150,10 +175,24 @@ export class GeminiEmbeddings implements EmbeddingAdapter {
   }
   async embed(input: string): Promise<number[]> {
     // The provider defaults to 3072; every call must explicitly request our stored vector size.
-    const reply = await this.client.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`, {
-      model: `models/${this.model}`, content: { parts: [{ text: input }] }, outputDimensionality: this.dimensions,
-    });
-    const values = list(object(reply.embedding).values);
+    const reply = await this.client.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`,
+      embeddingRequest(input, this.model, this.dimensions));
+    return this.vector(reply.embedding);
+  }
+  async embedMany(inputs: readonly string[]): Promise<number[][]> {
+    const vectors: number[][] = [];
+    for (const batch of embeddingBatches(inputs, this.model, this.dimensions)) {
+      const reply = await this.client.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents`, {
+        requests: batch.map(input => embeddingRequest(input, this.model, this.dimensions)),
+      });
+      const embeddings = list(reply.embeddings);
+      if (embeddings.length !== batch.length) throw new ProviderError("MALFORMED");
+      vectors.push(...embeddings.map(embedding => this.vector(embedding)));
+    }
+    return vectors;
+  }
+  private vector(embedding: unknown): number[] {
+    const values = list(object(embedding).values);
     if (values.length !== this.dimensions) throw new Error(`Embedding dimension mismatch: expected 768, received ${values.length}`);
     if (!values.every(v => typeof v === "number" && Number.isFinite(v))) throw new ProviderError("MALFORMED");
     return values as number[];

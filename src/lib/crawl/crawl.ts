@@ -11,6 +11,7 @@ export const DEFAULT_CRAWL_LIMITS = {
 } as const;
 export type CrawlLimits = { [K in keyof typeof DEFAULT_CRAWL_LIMITS]: number };
 export interface CrawlOptions {
+  policy?: "strict" | "tolerant";
   limits?: Partial<CrawlLimits>;
   dns?: SafeFetchOptions["dns"];
   transport?: Transport;
@@ -20,44 +21,56 @@ export interface CrawlResult {
   pages: CrawledPage[]; requests: number; bytes: number;
   status: "completed" | "stopped";
   errors: { url: string; message: string }[];
+  skipped?: { url: string; reason: "off-origin" | "http" | "non-html" | "robots" | "unavailable" | "empty" }[];
+  truncated?: boolean;
 }
+
+class CrawlLimitError extends Error {}
 
 // Query variants share one visit key to avoid calendars/search loops. Fetch the
 // first encountered variant, but check robots against its actual query string.
 function visitKey(url: URL): string { return url.origin + url.pathname; }
 
 export async function crawl(input: string, options: CrawlOptions = {}): Promise<CrawlResult> {
+  const tolerant = options.policy === "tolerant";
   const start = parsePublicUrl(input);
   const limits: CrawlLimits = { ...DEFAULT_CRAWL_LIMITS, ...options.limits };
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < (name === "maxDepth" ? 0 : 1)) throw new Error(`Invalid ${name} limit.`);
   }
   const deadline = performance.now() + limits.totalTimeoutMs;
-  const result: CrawlResult = { pages: [], requests: 0, bytes: 0, status: "completed", errors: [] };
+  const result: CrawlResult = { pages: [], requests: 0, bytes: 0, status: "completed", errors: [],
+    ...(tolerant ? { skipped: [], truncated: false } : {}) };
   let allowed: ((url: URL) => boolean) | undefined;
   const visited = new Set<string>();
   const transport: Transport = async (request) => {
-    if (performance.now() >= deadline) throw new Error("Crawl time limit exceeded.");
+    if (performance.now() >= deadline) throw new CrawlLimitError("Crawl time limit exceeded.");
     if (request.url.origin !== start.origin) throw new Error("External origin ignored.");
     if (allowed && !allowed(request.url)) throw new Error("Robots disallow.");
-    if (result.requests >= limits.maxRequests) throw new Error("Crawl request limit exceeded.");
-    if (result.bytes >= limits.maxTotalBytes) throw new Error("Crawl byte limit exceeded.");
+    if (result.requests >= limits.maxRequests) throw new CrawlLimitError("Crawl request limit exceeded.");
+    if (result.bytes >= limits.maxTotalBytes) throw new CrawlLimitError("Crawl byte limit exceeded.");
     result.requests++;
     const response = await (options.transport ?? nodeTransport)(request);
     return { ...response, body: (async function* () {
       for await (const chunk of response.body) {
         result.bytes += chunk.byteLength;
         // Report all observed bytes, including the chunk that crossed the cap.
-        if (result.bytes > limits.maxTotalBytes) throw new Error("Crawl byte limit exceeded.");
+        if (result.bytes > limits.maxTotalBytes) throw new CrawlLimitError("Crawl byte limit exceeded.");
         yield chunk;
       }
     })() };
   };
   const fetchPage = (url: string) => {
     const remaining = Math.floor(deadline - performance.now());
-    if (remaining < 1) throw new Error("Crawl time limit exceeded.");
+    if (remaining < 1) throw new CrawlLimitError("Crawl time limit exceeded.");
     return safeFetch(url, { dns: options.dns, transport, maxBytes: Math.min(limits.maxResponseBytes, limits.maxTotalBytes - result.bytes),
-      timeoutMs: Math.min(limits.fetchTimeoutMs, remaining) });
+      timeoutMs: Math.min(limits.fetchTimeoutMs, remaining) }).catch(error => {
+        // A deadline imposed by the remaining total budget ends the crawl, not just this page.
+        if (tolerant && remaining <= limits.fetchTimeoutMs && error instanceof Error && error.message === "Fetch deadline exceeded.") {
+          throw new CrawlLimitError("Crawl time limit exceeded.");
+        }
+        throw error;
+      });
   };
   const fail = (url: string, error: unknown) => {
     result.status = "stopped";
@@ -71,25 +84,42 @@ export async function crawl(input: string, options: CrawlOptions = {}): Promise<
     else throw new Error(`Robots fetch failed (${robots.status}).`);
   } catch (error) { fail(robotsUrl, error); return result; }
 
+  if (!allowed(start)) { fail(start.href, new Error("Robots disallow.")); return result; }
+
   const queue = [{ url: start, depth: 0 }];
   const scheduled = new Set([visitKey(start)]);
   // Sequential by design: one active safeFetch at a time.
   for (let index = 0; index < queue.length; index++) {
     const item = queue[index];
-    if (visited.has(visitKey(item.url)) || !allowed(item.url)) continue;
-    if (result.pages.length >= limits.maxPages) { fail(item.url.href, new Error("Crawl page limit exceeded.")); break; }
+    if (visited.has(visitKey(item.url))) continue;
+    if (!allowed(item.url)) { result.skipped?.push({ url: item.url.href, reason: "robots" }); continue; }
+    if (result.pages.length >= limits.maxPages) {
+      if (tolerant) result.truncated = true;
+      else fail(item.url.href, new Error("Crawl page limit exceeded."));
+      break;
+    }
     visited.add(visitKey(item.url));
     try {
       const response = await fetchPage(item.url.href);
       const finalUrl = new URL(response.url);
       if (visitKey(finalUrl) !== visitKey(item.url) && visited.has(visitKey(finalUrl))) continue;
       visited.add(visitKey(finalUrl));
-      if (response.status !== 200) { result.errors.push({ url: finalUrl.href, message: `Page status ${response.status}.` }); continue; }
+      if (response.status !== 200) {
+        if (tolerant && index > 0) result.skipped!.push({ url: finalUrl.href, reason: "http" });
+        else {
+          result.errors.push({ url: finalUrl.href, message: `Page status ${response.status}.` });
+          if (tolerant) { result.status = "stopped"; break; }
+        }
+        continue;
+      }
       const contentType = response.headers["content-type"];
-      if (typeof contentType !== "string" || !/^text\/html(?:;|$)/i.test(contentType)) continue;
+      if (typeof contentType !== "string" || !/^text\/html(?:;|$)/i.test(contentType)) {
+        result.skipped?.push({ url: finalUrl.href, reason: "non-html" }); continue;
+      }
       const extracted = extractHtml(response.body.toString("utf8"));
-      if (performance.now() >= deadline) throw new Error("Crawl time limit exceeded.");
-      result.pages.push({ ...extracted, url: finalUrl.href, depth: item.depth });
+      if (performance.now() >= deadline) throw new CrawlLimitError("Crawl time limit exceeded.");
+      if (!tolerant || extracted.sections.some(section => section.text.trim())) result.pages.push({ ...extracted, url: finalUrl.href, depth: item.depth });
+      else result.skipped!.push({ url: finalUrl.href, reason: "empty" });
       if (item.depth >= limits.maxDepth) continue;
       for (const link of extracted.links) {
         try {
@@ -100,7 +130,13 @@ export async function crawl(input: string, options: CrawlOptions = {}): Promise<
           }
         } catch { /* Unsupported links are not crawl targets. */ }
       }
-    } catch (error) { fail(item.url.href, error); break; }
+    } catch (error) {
+      if (!tolerant || index === 0) { fail(item.url.href, error); break; }
+      if (error instanceof CrawlLimitError) { result.truncated = true; break; }
+      const message = error instanceof Error ? error.message : "";
+      result.skipped!.push({ url: item.url.href, reason: message === "External origin ignored." ? "off-origin"
+        : message === "Robots disallow." ? "robots" : "unavailable" });
+    }
   }
   return result;
 }

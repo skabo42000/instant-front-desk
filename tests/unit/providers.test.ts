@@ -126,6 +126,7 @@ it("all adapter operations handle 429, HTTP errors, timeout and never leak raw p
     ()=>new GeminiAnswer(KEY,transport,undefined,5).generate(request),
     ()=>new GeminiQuestions(KEY,transport,undefined,5).generate([]),
     ()=>new GeminiEmbeddings(KEY,transport,undefined,5).embed("x"),
+    ()=>new GeminiEmbeddings(KEY,transport,undefined,5).embedMany(["x"]),
     ()=>new GroqAnswer(KEY,transport,undefined,5).generate(request),
     ()=>new GroqJudge(KEY,transport,undefined,5).judge({id:"q",kind:"off-topic",question:"?",expectedBehavior:"refuse",evidenceChunkIds:[],validationErrors:[]}, {kind:"refusal",text:"no",citations:[],logs:[]},[]),
   ];
