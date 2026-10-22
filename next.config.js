@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 module.exports = {
   // PGlite loads its WASM and pgvector extension from Node filesystem paths.
-  serverExternalPackages: ["@electric-sql/pglite", "@electric-sql/pglite-pgvector"],
+  serverExternalPackages: ["pg", "@electric-sql/pglite", "@electric-sql/pglite-pgvector"],
   // Local database files and private reports must never be traced into a server build.
   outputFileTracingExcludes: { "/*": ["./data/**/*", "./reports/**/*", "./benchmarks/**/*", "./.env*"] },
   async headers() {

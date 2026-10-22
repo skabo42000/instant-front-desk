@@ -1,11 +1,15 @@
+import { postgresConfiguration } from "./postgres-config";
 import "server-only";
 type Environment = Readonly<Record<string, string | undefined>>;
 export function pilotConfigurationIssues(env: Environment): string[] {
   if (env.IFD_PILOT_MODE !== "yes") return ["Pilot mode is disabled"];
   const issues: string[] = [];
-  if (env.IFD_DATA_STORE !== "supabase") issues.push("Persistent Supabase data store required");
-  if (env.RATE_LIMIT_STORE !== "supabase") issues.push("Shared rate limits required");
-  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(env.SUPABASE_URL ?? "") || (env.SUPABASE_SERVICE_ROLE_KEY?.length ?? 0) < 20) issues.push("Server-only shared database credentials required");
+  if (!["supabase", "postgres"].includes(env.IFD_DATA_STORE ?? "")) issues.push("Persistent pilot data store required");
+  if (env.RATE_LIMIT_STORE !== env.IFD_DATA_STORE || !["supabase", "postgres"].includes(env.RATE_LIMIT_STORE ?? "")) issues.push("Shared rate limits required");
+  if (env.IFD_DATA_STORE === "postgres") {
+    try { postgresConfiguration(env); } catch { issues.push("Restricted local Postgres credentials required"); }
+  }
+  if (env.IFD_DATA_STORE !== "postgres" && (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(env.SUPABASE_URL ?? "") || (env.SUPABASE_SERVICE_ROLE_KEY?.length ?? 0) < 20)) issues.push("Server-only shared database credentials required");
   if ((env.PILOT_ACCESS_TOKEN?.length ?? 0) < 32) issues.push("Pilot invitation password must be at least 32 characters");
   if (env.LOCAL_CHAT_MODE !== "real" || env.FREE_TIER_CONFIRMED !== "yes") issues.push("Confirmed free-only real chat required");
   if (!env.GEMINI_EVAL_API_KEY || !env.GROQ_EVAL_API_KEY) issues.push("Isolated evaluation provider keys required");

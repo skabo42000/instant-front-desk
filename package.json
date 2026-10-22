@@ -11,7 +11,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "server-only": "^0.0.1",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
@@ -19,7 +20,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "embedded-postgres": "18.4.0-beta.17",
-    "pg": "8.23.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
     "vitest": "^4.0.0"
@@ -47,6 +47,7 @@
     "check-shared": "node --conditions=react-server scripts/run-operations.cjs shared-check",
     "check-pilot": "node scripts/check-pilot.cjs",
     "mcp": "node scripts/run-mcp.cjs",
-    "mcp:smoke": "node scripts/check-mcp.cjs"
+    "mcp:smoke": "node scripts/check-mcp.cjs",
+    "live-db": "node --conditions=react-server scripts/run-live-db.cjs"
   }
 }

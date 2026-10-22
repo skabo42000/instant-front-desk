@@ -2,7 +2,10 @@ import "server-only";
 import { FakeEmbeddings, type EmbeddingAdapter } from "./models/embeddings";
 import { ModelGateway } from "./models/gateway";
 import { evaluationProviders, ProviderError, type HttpTransport } from "./models/providers";
-import { createSupabaseRpc, PostgresProviderBudget, type ProviderBudget } from "./shared-controls";
+import { PostgresProviderBudget, type ProviderBudget } from "./shared-controls";
+import { createPilotRpc } from "./pilot-rpc";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { LocalProviderStop } from "./provider-stop";
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -95,5 +98,5 @@ export function createChatRuntime(env: Environment = process.env,
 const local = globalThis as typeof globalThis & { frontDeskChatRuntime?: ChatRuntime };
 export function getChatServices(embeddingModel: string): ChatServices {
   return (local.frontDeskChatRuntime ??= createChatRuntime(process.env, undefined,
-    process.env.IFD_PILOT_MODE === "yes" ? new PostgresProviderBudget(createSupabaseRpc(process.env), new LocalProviderStop()) : undefined))(embeddingModel);
+    process.env.IFD_PILOT_MODE === "yes" ? new PostgresProviderBudget(createPilotRpc(process.env), new LocalProviderStop(process.env.IFD_PROVIDER_STOP_DIR ?? (process.env.IFD_DATA_STORE === "postgres" ? join(homedir(), "ifd-postgres/provider-stop") : undefined))) : undefined))(embeddingModel);
 }

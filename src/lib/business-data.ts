@@ -4,7 +4,8 @@ import type { Repository } from "./retrieve";
 import { businessRepository, type StoredBusiness, type SearchHit } from "./db/repository";
 import { findBusiness, getLocalDatabase, listBusinesses } from "./local-businesses";
 import { latestReport, type EvalReport } from "./eval/runner";
-import { createSupabaseRpc, type Rpc } from "./shared-controls";
+import { type Rpc } from "./shared-controls";
+import { createPilotRpc } from "./pilot-rpc";
 
 export interface BusinessData {
   list(): Promise<StoredBusiness[] | Awaited<ReturnType<typeof listBusinesses>>>;
@@ -52,7 +53,7 @@ export function remoteBusinessData(rpc: Rpc, allowed: readonly string[]): Busine
 let data: BusinessData | undefined;
 export function getBusinessData(): BusinessData {
   if (data) return data;
-  if (process.env.IFD_DATA_STORE === "supabase") return data = remoteBusinessData(createSupabaseRpc(process.env),
+  if (["supabase", "postgres"].includes(process.env.IFD_DATA_STORE ?? "")) return data = remoteBusinessData(createPilotRpc(process.env),
     (process.env.PILOT_BUSINESS_IDS ?? "").split(",").map(id => id.trim()).filter(Boolean));
   if (process.env.IFD_PILOT_MODE === "yes" || (process.env.IFD_DATA_STORE && process.env.IFD_DATA_STORE !== "local")) throw new Error("Persistent pilot data store required");
   return data = localBusinessData(getLocalDatabase);

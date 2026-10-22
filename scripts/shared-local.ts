@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { PostgresProviderBudget, PostgresRateLimitStore, type Rpc } from "../src/lib/shared-controls";
 import { LocalProviderStop } from "../src/lib/provider-stop";
 import { createChatRuntime } from "../src/lib/chat-runtime";
+import { pooledPostgresRpc, restrictedPostgresPool } from "../src/lib/postgres-rpc";
 
 export const SCOPE = "Local Postgres 18.4 via direct SQL; not Supabase PostgREST/hosted, not a deployment proof.";
 export const MIGRATIONS = ["001_initial.sql", "002_embedding_dimensions.sql", "003_question_lists.sql", "004_eval_reports.sql", "005_pilot_controls.sql", "006_pilot_reads.sql", "007_pilot_permissions.sql", "008_budget_stop.sql"];
@@ -103,7 +104,8 @@ interface Client extends SqlClient { connect(): Promise<void>; end(): Promise<vo
 interface Cluster { initialise(): Promise<void>; start(): Promise<void>; stop(): Promise<void>; getPgClient(database: string, host: string): Client }
 export async function main(args: string[]) {
   const dryRun = args.includes("--dry-run");
-  const files = args.filter(arg => arg !== "--dry-run");
+  const postgresPath = args.includes("--postgres");
+  const files = args.filter(arg => arg !== "--dry-run" && arg !== "--postgres");
   if (files.length !== 1 || files[0].startsWith("--")) throw Error("check-shared-local -- [--dry-run] OUTPUT_JSON");
   const project = await realpath(process.cwd());
   const output = resolve(files[0]);
@@ -112,6 +114,7 @@ export async function main(args: string[]) {
   validateDataRoot(root, project);
   const report = {
     schema: 1, at: new Date().toISOString(), test: "Local direct-SQL shared controls", scope: SCOPE, dryRun,
+    adapter: postgresPath ? "pooledPostgresRpc (production boundary), restricted ifd_app login" : "legacy directRpc",
     migrations: migrations.map(({ name, sha256 }) => ({ name, sha256 })),
     roles: "Stand-in anon/authenticated/service_role created before migrations with Supabase-style default grants on public tables/functions/sequences, so db/007 revokes are exercised. Approximation of a hosted project, not one.",
     requestedDataRoot: root,
@@ -149,8 +152,12 @@ export async function main(args: string[]) {
       const password = randomBytes(32).toString("hex");
       const loadPg = new Function("return import('pg')") as () => Promise<{ default: { Client: new (options: object) => Client } }>;
       const PgClient = (await loadPg()).default.Client;
-      const newClient = () => new PgClient({ host: "127.0.0.1", port, user: "postgres", database: "postgres", password,
+      const newClient = (app = false, bootstrap = false) => new PgClient({ host: "127.0.0.1", port, user: app ? "ifd_app" : "postgres",
+        database: postgresPath && !bootstrap ? "ifd_live" : "postgres", password,
         connectionTimeoutMillis: 3000, query_timeout: 5000 });
+      const rpcFor = (client: Client): Rpc => postgresPath ? pooledPostgresRpc(restrictedPostgresPool({ connect: async () => ({
+        query: (sql, values) => client.query(sql, values), release: () => {},
+      }) }), [password]) : directRpc(client);
       cluster = new EmbeddedPostgres({ databaseDir: report.dataDirectory, port, user: "postgres", password,
         persistent: true, createPostgresUser: false, initdbFlags: ["--locale=C"],
         postgresFlags: ["-h", "127.0.0.1", "-k", report.dataDirectory], onLog: () => {}, onError: () => {} });
@@ -171,8 +178,13 @@ export async function main(args: string[]) {
       }
       report.stage = "start";
       stopped = false; await cluster.start();
-      const connect = async () => {
-        const c = newClient();
+      if (postgresPath) {
+        const bootstrap = newClient(false, true);
+        try { await bootstrap.connect(); await bootstrap.query("CREATE DATABASE ifd_live"); }
+        finally { await bootstrap.end(); }
+      }
+      const connect = async (app = false) => {
+        const c = newClient(app);
         c.on("error", () => {}); // Shutdown errors are expected; query promises still reject.
         clients.push(c); await c.connect(); await c.query("SET statement_timeout = '5s'"); return c;
       };
@@ -185,26 +197,51 @@ export async function main(args: string[]) {
       await a.query(STAND_IN_ROLES_SQL);
       report.stage = "migrations";
       for (const migration of migrations) await a.query(migration.sql);
+      let appPermissions = true;
+      if (postgresPath) {
+        const { APP_ROLE_SQL, verifyAppRole } = await import("./live-db");
+        await a.query("CREATE TABLE ifd_migrations(name text PRIMARY KEY,sha256 text NOT NULL)");
+        await a.query("BEGIN");
+        await a.query("SELECT set_config('ifd.app_password',$1,true)", [password]);
+        await a.query(APP_ROLE_SQL);
+        await a.query("COMMIT");
+        appPermissions = await verifyAppRole(a);
+      }
       report.stage = "checks";
       const pids = await Promise.all([a.query("SELECT pg_backend_pid() AS pid"), b.query("SELECT pg_backend_pid() AS pid")]);
       report.checks.connections = { pass: pids[0].rows[0].pid !== pids[1].rows[0].pid, count: 2 };
       report.stage = "permissions";
       report.checks.permissions = await checkPermissions(a);
-      const stores = [a, b].map(c => new PostgresRateLimitStore(directRpc(c)));
+      report.checks.permissions.appRoleVerified = postgresPath ? appPermissions : null;
+      report.checks.permissions.pass &&= appPermissions;
+      // SQL inspection uses the owner; all production RPC checks use the restricted login.
+      let appA = postgresPath ? await connect(true) : a, appB = postgresPath ? await connect(true) : b;
+      if (postgresPath) {
+        const identities = await Promise.all([appA, appB].map(c => c.query("SELECT current_user AS role,pg_backend_pid() AS pid")));
+        report.checks.connections = { pass: identities[0].rows[0].pid !== identities[1].rows[0].pid && identities.every(r => r.rows[0].role === "ifd_app"), count: 2, role: "ifd_app" };
+        let tableDenied = false, createDenied = false;
+        try { await appA.query("SELECT * FROM chunks LIMIT 1"); } catch (error) { tableDenied = (error as { code?: string }).code === "42501"; }
+        try { await appA.query("CREATE TABLE ifd_forbidden(id integer)"); } catch (error) { createDenied = (error as { code?: string }).code === "42501"; }
+        report.checks.permissions.appTableReadDenied = tableDenied;
+        report.checks.permissions.appSchemaCreateDenied = createDenied;
+        report.checks.permissions.pass &&= tableDenied && createDenied;
+      }
+      const stores = [appA, appB].map(c => new PostgresRateLimitStore(rpcFor(c)));
       const key = `client:local-proof-${randomUUID()}`;
       report.checks.concurrency = summarizeRace(await Promise.allSettled(Array.from({ length: 24 }, (_, i) =>
         stores[i % 2].consume([{ key, limit: 3 }, { key: `${key}-${i}`, limit: 1 }], 60000))));
       const stopDirectory = join(report.dataDirectory, "provider-stop");
-      const budgetA = new PostgresProviderBudget(directRpc(a), new LocalProviderStop(stopDirectory));
+      const budgetA = new PostgresProviderBudget(rpcFor(appA), new LocalProviderStop(stopDirectory));
       const reserved = await budgetA.reserve(60); await budgetA.stop();
       // Empty local store: prove DB persistence without marker replay hiding a regression.
       const observerDirectory = join(report.dataDirectory, "observer-stop");
-      const acceptedAfterStop = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(observerDirectory)).reserve(60);
+      const acceptedAfterStop = await new PostgresProviderBudget(rpcFor(appB), new LocalProviderStop(observerDirectory)).reserve(60);
       report.checks.budgetPersistence = { pass: reserved && !acceptedAfterStop, reserved, acceptedAfterStop };
       report.stage = "saved-stop-outage";
       await disconnect(); await cluster.stop(); stopped = true;
       stopped = false; await cluster.start(); a = await connect(); b = await connect();
-      const acceptedAfterRecovery = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(observerDirectory)).reserve(60);
+      appA = postgresPath ? await connect(true) : a; appB = postgresPath ? await connect(true) : b;
+      const acceptedAfterRecovery = await new PostgresProviderBudget(rpcFor(appB), new LocalProviderStop(observerDirectory)).reserve(60);
       report.checks.savedStopOutage = { pass: !acceptedAfterRecovery, acceptedAfterRecovery, scope: "Orderly database stop/restart; not host power loss." };
       // Only this disposable test cluster is reset, to isolate an unsaved quota stop.
       await a.query("TRUNCATE pilot_budget");
@@ -212,14 +249,14 @@ export async function main(args: string[]) {
       let stopRejected = false, reservationRejected = false;
       let connectionRejected = false;
       const outageRpc: Rpc = async <T>(name: string, params: Record<string, unknown>): Promise<T> => {
-        const c = newClient(); c.on("error", () => {});
+        const c = newClient(postgresPath); c.on("error", () => {});
         try {
           try { await c.connect(); } catch (error) { connectionRejected = true; throw error; }
-          return await directRpc(c)<T>(name, params);
+          return await rpcFor(c)<T>(name, params);
         } finally { await c.end().catch(() => {}); }
       };
       const observedRpc: Rpc = async <T>(name: string, params: Record<string, unknown>): Promise<T> => {
-        try { return stopped ? await outageRpc<T>(name, params) : await directRpc(a)<T>(name, params); }
+        try { return stopped ? await outageRpc<T>(name, params) : await rpcFor(appA)<T>(name, params); }
         catch (error) { if (name === "ifd_stop_calls") stopRejected = true; throw error; }
       };
       const quotaBudget = new PostgresProviderBudget(observedRpc, new LocalProviderStop(stopDirectory));
@@ -234,7 +271,8 @@ export async function main(args: string[]) {
       catch (error) { quotaRejected = (error as { code?: string }).code === "FREE_TIER_EXHAUSTED"; }
       try { await quotaBudget.reserve(60); } catch { reservationRejected = true; }
       stopped = false; await cluster.start(); b = await connect();
-      const acceptedAfterLostStop = await new PostgresProviderBudget(directRpc(b), new LocalProviderStop(stopDirectory)).reserve(60);
+      appB = postgresPath ? await connect(true) : b;
+      const acceptedAfterLostStop = await new PostgresProviderBudget(rpcFor(appB), new LocalProviderStop(stopDirectory)).reserve(60);
       const sharedStopped = (await b.query("SELECT stopped FROM pilot_budget WHERE id='pilot'")).rows[0]?.stopped === true;
       report.checks.unsavedStopOutage = {
         pass: quotaRejected && connectionRejected && stopRejected && reservationRejected && !acceptedAfterLostStop && sharedStopped,
