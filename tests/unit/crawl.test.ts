@@ -4,6 +4,7 @@ import { crawl, DEFAULT_CRAWL_LIMITS, type CrawlOptions } from "@/lib/crawl/craw
 import { extractHtml } from "@/lib/crawl/extract";
 import { parseRobots } from "@/lib/crawl/robots";
 import type { Transport, TransportResponse } from "@/lib/crawl/safe-fetch";
+import extractionBaseline from "../fixtures/extraction-baseline.json";
 
 vi.mock("node:http", () => ({ request: () => { throw new Error("Network forbidden."); } }));
 vi.mock("node:https", () => ({ request: () => { throw new Error("Network forbidden."); } }));
@@ -32,6 +33,25 @@ const robots404: Reply = { status: 404 };
 afterEach(() => vi.useRealTimers());
 
 describe("offline crawl fixtures", () => {
+  it.each(Object.entries(extractionBaseline))("preserves the complete pre-fix extraction of %s", (path, expected) => {
+    expect(extractHtml(readFileSync(`tests/fixtures/${path}`, "utf8"))).toEqual(expected);
+  });
+  it("extracts 32,000 repeated '<' bytes well within the reviewer's 50 ms deadline", async () => {
+    const malformed = "<".repeat(32_000);
+    const start = performance.now();
+    expect(extractHtml(malformed)).toEqual({ title: "", cleanText: "", sections: [], links: [] });
+    const extractionMs = performance.now() - start;
+    expect(extractionMs).toBeLessThan(25);
+    const { options } = setup({ "/robots.txt": robots404, "/": { text: malformed } });
+    const crawlStart = performance.now();
+    const result = await crawl(origin, { ...options, limits: { totalTimeoutMs: 50 } });
+    const crawlMs = performance.now() - crawlStart;
+    expect(result.status).toBe("completed");
+    expect(result.errors).toEqual([]);
+    expect(result.pages).toHaveLength(1);
+    expect(crawlMs).toBeLessThan(50);
+    console.info(`Repeated '<' regression: extraction=${extractionMs.toFixed(2)}ms, fake crawl=${crawlMs.toFixed(2)}ms (50ms deadline)`);
+  });
   it("crawls Bright Salon using links in navigation without retaining navigation text", async () => {
     const { calls, options } = setup({
       "/robots.txt": { text: fixture("bright-salon", "robots.txt") },

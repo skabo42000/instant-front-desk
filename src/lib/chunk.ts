@@ -1,5 +1,6 @@
 import "server-only";
 import { createHash } from "node:crypto";
+import { hasSourceInstructions } from "./source-safety";
 import type { TextSection } from "./crawl/extract";
 
 export const MAX_CHUNK_LENGTH = 800;
@@ -16,6 +17,8 @@ export interface TextChunk {
 export function chunkPage(pageUrl: string, sections: readonly TextSection[]): TextChunk[] {
   const chunks: TextChunk[] = [];
   for (const section of sections) {
+    // A hostile heading applies to the whole section, including every split chunk.
+    if (hasSourceInstructions(section.heading)) continue;
     const text = section.text.replace(/\s+/g, " ").trim();
     const heading = section.heading.replace(/\s+/g, " ").trim();
     for (let start = 0; start < text.length;) {

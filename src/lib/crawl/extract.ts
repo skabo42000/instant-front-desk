@@ -15,6 +15,50 @@ export function decodeEntities(text: string): string {
 
 const tidy = (text: string) => decodeEntities(text).replace(/\s+/g, " ").trim();
 
+// Each lookup moves forward and remembers exhaustion, so overlapping malformed
+// tags cannot make us scan the same suffix repeatedly.
+function forwardSearch(source: string, character: string) {
+  let found = -2;
+  return (from: number): number => {
+    if (found === -2 || (found >= 0 && found < from)) found = source.indexOf(character, from);
+    return found;
+  };
+}
+
+function* htmlTokens(source: string): Generator<string> {
+  const tagEnd = forwardSearch(source, ">");
+  const singleQuote = forwardSearch(source, "'");
+  const doubleQuote = forwardSearch(source, '"');
+  const closeSingle = forwardSearch(source, "'");
+  const closeDouble = forwardSearch(source, '"');
+  const endAfterSingle = forwardSearch(source, ">");
+  const endAfterDouble = forwardSearch(source, ">");
+  for (let position = 0; position < source.length;) {
+    if (source[position] !== "<") {
+      const next = source.indexOf("<", position);
+      const end = next < 0 ? source.length : next;
+      yield source.slice(position, end);
+      position = end;
+      continue;
+    }
+    let end = tagEnd(position + 1);
+    if (end < 0) { position++; continue; }
+    const single = singleQuote(position + 1);
+    const double = doubleQuote(position + 1);
+    const firstQuote = single >= 0 && (double < 0 || single < double) ? single : double;
+    // Preserve the old tokenizer's quoted-attribute alternative and its fallback
+    // to the first '>' when a quote or the following tag end is missing.
+    if (firstQuote >= 0 && firstQuote < end) {
+      const isSingle = firstQuote === single;
+      const close = (isSingle ? closeSingle : closeDouble)(firstQuote + 1);
+      const quotedEnd = close < 0 ? -1 : (isSingle ? endAfterSingle : endAfterDouble)(close + 1);
+      if (quotedEnd >= 0) end = quotedEnd;
+    }
+    yield source.slice(position, end + 1);
+    position = end + 1;
+  }
+}
+
 // A small static-HTML tokenizer, not a browser: scripts are never executed.
 export function extractHtml(html: string): ExtractedHtml {
   const title = tidy(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(html)?.[1].replace(/<[^>]*>/g, " ") ?? "");
@@ -31,7 +75,7 @@ export function extractHtml(html: string): ExtractedHtml {
     section.text = tidy(section.text);
     if (section.heading || section.text) sections.push(section);
   };
-  for (const token of source.match(/<[^>"']*(?:"[^"]*"|'[^']*')[^>]*>|<[^>]*>|[^<]+/g) ?? []) {
+  for (const token of htmlTokens(source)) {
     if (!token.startsWith("<")) {
       if (!hidden) { if (headingLevel) headingText += token; else section.text += token; }
       continue;
