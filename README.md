@@ -1,6 +1,6 @@
 # Instant Front Desk (working name)
 
-Local prototype, updated October 15, 2026. Collect an approved business website,
+Local prototype. Current maintenance record: October 22, 2026. Collect an approved business website,
 ask questions grounded in its saved pages, and inspect an answer score card.
 Built with Next.js, TypeScript, Tailwind, local Postgres (PGlite + pgvector),
 Gemini answers/embeddings and an independent Groq judge. No public deployment or
@@ -11,7 +11,7 @@ separate retrieval/grounding/completeness checks, a browser-only human-review fi
 and same-benchmark comparisons. **All 52 questions now have an explicit AI source
 review**, delegated by Bosko instead of manual labeling; this is not human review
 or independent judge calibration. See [the review record](docs/ai-review.md).
-Localhost is intentionally stopped; there is no public testing URL yet.
+This is a local tool with no public testing URL. Run the documented local start command when needed; a saved README is not evidence that a process is currently running.
 
 Hybrid search remains the default: a BM25 reranker reduced complete reference
 coverage on the Synq draft and showed no gain on the salon draft. Shared Postgres
@@ -26,7 +26,7 @@ Three read-only MCP tools now expose explicitly approved business metadata and
 saved legacy evaluation reports through the running app's shared database. The
 API is disabled by default, loopback-only by configuration and unavailable in
 pilot mode. See [MCP setup, security bounds and verification](docs/mcp.md). This
-extension makes no model calls. A connected-assistant demonstration is pending.
+extension makes no model calls. A fictional-data connected-assistant demonstration was verified October 16 and rerun October 19, 2026; see [the dated case study](docs/mcp-case-study.md). This does not establish real-customer use.
 
 ## Legacy live evidence
 
@@ -41,10 +41,7 @@ the active snapshots. Private reports retain questions, answers, citations, verd
 model labels and prompt versions. New frozen reruns reuse both the stored site
 snapshot and an exact approved question version.
 
-Those scores use the older single-verdict judge. The new three-dimension Synq
-diagnostic hit free-tier exhaustion and had two execution errors, so it is
-inconclusive. Do not compare its grades with the legacy pass rates. Further model
-calls stopped; the new judge still needs human calibration and quota recovery.
+Those scores use the older single-verdict judge. The first three-dimension diagnostic was inconclusive after quota exhaustion and execution errors. Later October 17–18 runs and their approval status are recorded in the current [AI OS project card](../ai-os/projects/instant-front-desk.md) and dated case-study/evaluation records. Keep versions distinct when comparing scores. Human judge calibration remains incomplete; this README is not authorization for another provider run.
 
 October 15 changes connect real local browser chat to matching Gemini embeddings,
 add process-wide call/quota stops, improve coverage/list retrieval and policy-date

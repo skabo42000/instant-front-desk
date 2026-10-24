@@ -1,4 +1,5 @@
 import "server-only";
+import { chatRequestOriginAllowed } from "./request-origin";
 import { randomUUID } from "node:crypto";
 import type { PGlite } from "@electric-sql/pglite";
 import { answer, prepareAnswerEvidence, ANSWER_PROMPT_VERSION } from "./answer";
@@ -45,9 +46,7 @@ export function createChatHandler(getDatabase: () => Promise<PGlite>, limiter: C
       ...(!match ? { "Set-Cookie": `ifd-client=${clientId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400` } : {}),
       ...(status === 429 ? { "Retry-After": "60" } : {}),
     } }); };
-    const origin = request.headers.get("origin");
-    const expectedOrigin = process.env.IFD_PILOT_MODE === "yes" ? process.env.PILOT_PUBLIC_ORIGIN : new URL(request.url).origin;
-    if (origin && origin !== expectedOrigin) return reply({ error: "Request origin is not allowed." }, 403, "cross-origin");
+    if (!chatRequestOriginAllowed(request)) return reply({ error: "Request origin is not allowed." }, 403, "cross-origin");
     let input: unknown;
     try { input = await readBody(request); } catch { return reply({ error: "Please send a shorter question in the expected format." }, 400, "invalid-request"); }
     if (!input || typeof input !== "object" || !("slug" in input) || !("question" in input) ||

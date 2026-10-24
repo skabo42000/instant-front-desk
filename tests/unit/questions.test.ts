@@ -5,8 +5,9 @@ import { businessRepository } from "../../src/lib/db/repository";
 import { FakeQuestionGenerator, questionRepository, TRAP_CATEGORIES, validateGeneratedQuestions } from "../../src/lib/eval/questions";
 import { fakeEmbedding, FAKE_EMBEDDING_MODEL } from "../helpers/fake-embeddings";
 import { execute } from "../../scripts/questions";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { QuestionList } from "../../src/lib/eval/questions";
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12,"0")}`;
 const A=id(1), B=id(2), RUN=id(3), PAGE=id(4), CHUNK=id(5);
@@ -55,13 +56,13 @@ describe("versioned evaluation questions", () => {
     const old=await repo.generate();
     await execute(db,[A,"approve",String(old.version)]);
     const q=old.questions.find(q=>q.kind==="source")!;
-    await mkdir("data",{recursive:true});
-    const file=`data/question-edit-test-${randomUUID()}.json`;
+    const directory = await mkdtemp(join(tmpdir(), "ifd-question-edit-"));
+    const file = join(directory, "edit.json");
     let next: QuestionList;
     try {
       await writeFile(file,JSON.stringify({question:"What are the listed hours?",expectedBehavior:"Cite hours",evidenceChunkIds:[CHUNK]}));
       next=await execute(db,[A,"edit",String(old.version),q.id,file]) as QuestionList;
-    } finally { await unlink(file); }
+    } finally { await rm(directory, { recursive: true, force: true }); }
     expect(next.version).toBe(old.version+1);
     expect(next.approvedAt).toBeNull();
     expect(next.questions.every(item=>!old.questions.some(prior=>prior.id===item.id))).toBe(true);
