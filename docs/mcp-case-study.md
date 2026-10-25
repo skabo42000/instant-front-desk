@@ -53,7 +53,7 @@ These cover concrete attacks, not every prompt injection or hostile local proces
 
 Local prototype, built with AI coding agents. No production or customer-use evidence. Scripted models and token-hash embeddings demonstrate protocol behavior rather than real-model quality. TCP loopback, Claude GUI setup, hosted CI execution and deployment readiness remain outside the engineer's completed checks. [Engineer result][engineer], [pilot gates](pilot.md)
 
-Existing tracked benchmarks contain public text and embeddings from the owner's real sites. The stricter portfolio requirement to track no real-business pages remains unmet; publication needs a separate decision on those fixtures. [Privacy limit](mcp.md#verification-and-remaining-limits)
+Tracked benchmarks contain public website text and embeddings from Synq Logic and European Beauty Lounge, kept as realistic evaluation fixtures with the owner's approval (2026-10-25). They contain no visitor conversations, customer records or credentials. [Privacy limit](mcp.md#verification-and-remaining-limits)
 
 ## Run the two-minute demo
 

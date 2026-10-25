@@ -199,12 +199,7 @@ deployment readiness. Historical assistant-mode evidence remains separate in
 [mcp-case-study.md](mcp-case-study.md); the legacy `--assistant` path uses a remote
 subscription service and is outside this offline demo. Existing pilot gates remain.
 
-Repository privacy limit: earlier tracked `benchmarks/owned-sites/` snapshots
-contain the owner's real public website text and embeddings (see
-[benchmark provenance](../benchmarks/README.md)). This change adds only fictional
-demo data and does not remove those existing evaluation artifacts. The portfolio
-brief's stricter “no real business pages tracked” check therefore remains unmet;
-publishing this repository requires a separate decision on those fixtures.
+Repository privacy limit: tracked `benchmarks/owned-sites/` snapshots contain public website text and embeddings from Synq Logic and European Beauty Lounge. The owner approved keeping them as evaluation fixtures on 2026-10-25. They contain no visitor conversations, customer records or credentials; private runtime data stays in ignored `data/`.
 
 Exercise: predict whether the exact-price question will return `isError: true`
 or `kind: refusal`, run the demo, and explain the difference from its rejected
