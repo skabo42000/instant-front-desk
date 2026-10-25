@@ -1,299 +1,116 @@
-# Instant Front Desk (working name)
+# Instant Front Desk
 
-[![Offline checks](https://github.com/skabo42000/instant-front-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/skabo42000/instant-front-desk/actions/workflows/ci.yml)
+Turn a business's saved website pages into a local assistant that answers questions with source citations, refuses unsupported requests and shows a score card of saved evaluations. The goal is simple: check what the assistant can answer before asking an owner to trust it.
 
-Local prototype. Current maintenance record: October 22, 2026. Collect an approved business website,
-ask questions grounded in its saved pages, and inspect an answer score card.
-Built with Next.js, TypeScript, Tailwind, local Postgres (PGlite + pgvector),
-Gemini answers/embeddings and an independent Groq judge. No public deployment or
-customer-use evidence. Scope and dated decisions: [project brief](docs/brief.md).
+I build with AI coding agents, directing the workflow and checking examples and failures. **Instant Front Desk is a local portfolio prototype. There is no public app deployment or customer-use evidence.**
 
-The evaluation foundation now has [versioned owned-site snapshots and query caches](benchmarks/README.md),
-separate retrieval/grounding/completeness checks, a browser-only human-review file,
-and same-benchmark comparisons. **All 52 questions now have an explicit AI source
-review**, delegated by Bosko instead of manual labeling; this is not human review
-or independent judge calibration. See [the review record](docs/ai-review.md).
-This is a local tool with no public testing URL. Run the documented local start command when needed; a saved README is not evidence that a process is currently running.
+**See the idea in two minutes:** [fictional MCP transcript](docs/mcp-demo-transcript.md) · [MCP case study](docs/mcp-case-study.md) · [run the fictional demo](#try-the-fictional-demo)
 
-Hybrid search remains the default: a BM25 reranker reduced complete reference
-coverage on the Synq draft and showed no gain on the salon draft. Shared Postgres
-rate limits, persistent provider-call budgets, request metadata, safe cost
-estimates and invitation-only pilot controls are implemented. See
-[evaluation evidence and limitations](docs/evaluation-foundation.md) and the
-[controlled pilot package and gates](docs/pilot.md). Nothing has been deployed.
+Bosko Tutnjilovic · AI Automation Engineer · [Synq Logic](https://synqlogic.com)
 
-## MCP
+## A question, an answer and a limit
 
-Four read-only MCP tools expose allowlisted business metadata, saved evaluations
-and the website chat's cited answer engine, with shared rate and provider-call
-limits. Built with AI coding agents; local prototype, no customer use or deployment.
-Read the [case study](docs/mcp-case-study.md) for design decisions, security fixes
-and evidence. With Node 22+ and dependencies installed (`npm ci`), run
-`npm run mcp:demo` for the [two-minute fictional demo](docs/mcp.md#two-minute-fictional-demo)
-and [transcript](docs/mcp-demo-transcript.md). It needs no keys or network listener;
-scripted replies demonstrate the protocol, not real-model quality.
+The fictional walkthrough uses Maple Street Dental. It demonstrates a cited Saturday-hours answer, a refusal to invent an exact checkup price and rejection of invalid input. The business and saved evaluation are invented; its `.test` address is never fetched.
 
-## Legacy live evidence
+The demo runs the real MCP protocol and application checks with scripted model replies. It demonstrates tool discovery, data flow, citations and refusal behavior. It does **not** measure live-model answer quality.
 
-| Website | Recorded complete live run | Result | Limits |
-| --- | --- | --- | --- |
-| European Beauty Lounge | October 15, 2026 | 24/26, no execution errors, 74 provider attempts | Fixed restored question set; remaining misses concern a privacy detail and where current prices/deals are listed. |
-| Synq Logic | October 15, 2026 | 24/26, no execution errors, 74 provider attempts | Fixed question set; one missing privacy detail and one judge error on a safe refusal. |
+## Try the fictional demo
 
-These are small samples on the owner's sites, not customer results. Questions
-were regenerated between older runs; October 15 reruns freeze approved lists and
-the active snapshots. Private reports retain questions, answers, citations, verdicts, errors,
-model labels and prompt versions. New frozen reruns reuse both the stored site
-snapshot and an exact approved question version.
+Requires Node.js 22+ and npm.
 
-Those scores use the older single-verdict judge. The first three-dimension diagnostic was inconclusive after quota exhaustion and execution errors. Later October 17–18 runs and their approval status are recorded in the current [AI OS project card](../ai-os/projects/instant-front-desk.md) and dated case-study/evaluation records. Keep versions distinct when comparing scores. Human judge calibration remains incomplete; this README is not authorization for another provider run.
+```bash
+git clone https://github.com/skabo42000/instant-front-desk.git
+cd instant-front-desk
+npm ci
+npm run mcp:demo
+```
 
-October 15 changes connect real local browser chat to matching Gemini embeddings,
-add process-wide call/quota stops, improve coverage/list retrieval and policy-date
-handling, fix database packaging at runtime, and add fixed fictional regression cases. See
-[validation notes](docs/validation.md) for commands and new live results.
+The demo uses a disposable in-memory database. It needs no model keys, saved business database or network listener and makes no external calls after dependencies are installed. It prints results and regenerates `docs/mcp-demo-transcript.md`.
 
-## Open the local app
+To check the fictional session without rewriting that transcript:
 
-Use Node.js 22 LTS or newer. Install the existing locked dependencies with
-`npm ci`, then run:
+```bash
+npm run mcp:smoke
+```
 
-```sh
+See [MCP setup and limits](docs/mcp.md) for host configuration and the separate real-app connection. The scripted SDK client is not evidence that an AI assistant autonomously selected every tool in a real-business session.
+
+## What the application does
+
+- Collects approved public pages from one exact website origin, with private-address checks, robots.txt handling and page, size and time limits.
+- Stores page chunks and embeddings, retrieves relevant evidence and returns cited answers or refusals.
+- Saves versioned questions and evaluation reports so failures can be inspected instead of hidden inside an average score.
+- Separates retrieval, grounding and completeness checks. Real answer evaluations use a judge from a different model family.
+- Provides a read-only MCP interface to scoped business and evaluation information, alongside the documented cited-answer path.
+
+```mermaid
+flowchart LR
+    S[Approved website] --> C[Bounded crawler]
+    C --> D[Saved pages and vector search]
+    Q[Browser question] --> R[Retrieve evidence]
+    D --> R
+    R --> A[Cited answer or refusal]
+    A --> E[Saved evaluation and failures]
+    M[MCP client] --> H[Scoped local interface]
+    H --> D
+```
+
+The project uses Next.js, TypeScript and Tailwind, local Postgres through PGlite with pgvector, Gemini answers/embeddings and a separate Groq judge. Hosted pilot controls are a separate configuration from local use.
+
+## Recorded evidence
+
+On October 17, 2026, the prototype was evaluated on two owned websites, with 26 questions per site. Gemini answers were graded by Groq `gpt-oss-120b` for grounding, completeness and correctness.
+
+| Website | Passed all three checks | Execution errors |
+| --- | --- | --- |
+| Synq Logic | 24/26 | 0 |
+| European Beauty Lounge | 22/26 | 1 grader error |
+
+The questions were reviewed by AI, not human-labeled, and the grader has not been calibrated against human labels. These are small owned-site benchmarks, not customer results or human-validated accuracy. Errors and missing checks do not count as passes. Different snapshots, questions or judge versions must not be treated as the same benchmark.
+
+Other dated local evidence includes a direct-SQL Postgres control test: 24 simultaneous requests against a limit of 3 produced exactly 3 accepted requests and no errors. That checks the recorded database control, not a hosted API or Supabase deployment.
+
+Read [evaluation foundations](docs/evaluation-foundation.md), [AI question-review provenance](docs/ai-review.md) and [validation notes](docs/validation.md). Public [benchmark fixtures](benchmarks/README.md) support offline comparisons. Full private reports and local databases are not part of a clean clone.
+
+## Open the local web app
+
+After installing dependencies:
+
+```bash
 npm run dev
 ```
 
-Open http://127.0.0.1:3000. The home page lists saved businesses. Each
-`/b/<slug>` page has chat and its latest saved score card with failures/errors.
-The server binds to this machine. No public ingestion, question-editing or
-administration endpoints exist.
+Open `http://127.0.0.1:3000`. The server binds to loopback. A new clone does not contain your private saved business database. Default fake chat refuses questions; adding provider keys alone does not enable live chat. Use the fictional MCP demo above for an immediate, provider-free example.
 
-October 22 local UI addition: in free-only real chat mode, use **Add a website**
-on the loopback home page to load an approved public site and open its chat.
-The form uses the existing safe crawler and chat-compatible Gemini 768-dimensional
-embeddings inside the server, with one load at a time and the shared free-call cap.
-It is unavailable in pilot/token-configured environments or on non-loopback hosts.
-See [browser loading, configuration and limits](docs/ingestion.md).
+Stop the web server before running a database CLI against the same local database. PGlite supports only one process on that folder. See [ingestion](docs/ingestion.md) for loading an approved site and the separate live-chat setup, account checks and call limits.
 
-Stop the server with Ctrl+C before any database CLI command. The CLI and server
-share `data/instant-front-desk`; PGlite supports only one process here.
+Live ingestion, answers and judging send content to providers and consume quota. A “free tier confirmed” setting is an operator confirmation, not a billing guarantee. There is no automatic paid upgrade.
 
-`IFD_DATABASE_DIR` can select another local folder without replacing the default
-database. Both the web server and CLI read this setting from `.env.local`; a
-process-environment override takes precedence. On this restored Mac, the active
-folder is `data/instant-front-desk-mac`. An optional output-root override keeps
-the current validation reports together:
+## Offline checks
 
-```sh
-export IFD_OUTPUT_ROOT=data/mac-session
-```
-
-```sh
-npm run local-status
-npm run ingest -- https://approved-site.example/
-```
-
-`local-status` prints business IDs, page slugs, embedding models, chunk counts and
-latest approved question versions, using no keys or network. Ordinary `ingest`
-uses fake embeddings for offline practice. Real ingestion uses the separately
-authorized live runner below; the two vector spaces are never mixed.
-
-## Free-only local live chat
-
-By default, chat uses an empty fake answer script and refuses questions. Adding
-keys alone does not enable real calls. For real-ingested businesses, Next.js reads
-these settings from ignored `.env.local`:
-
-```dotenv
-LOCAL_CHAT_MODE=real
-FREE_TIER_CONFIRMED=yes
-LOCAL_CHAT_MAX_CALLS=60
-```
-
-Keep the isolated `GEMINI_EVAL_API_KEY` and `GROQ_EVAL_API_KEY` there too. Never use
-the widget key. No Supabase account, database URL, production model keys, Docker
-or paid subscription is needed for this local mode. `MODEL_MODE` belongs to the
-older scaffold config; it does not control local chat.
-
-Set `FREE_TIER_CONFIRMED=yes` only after checking that the Gemini project and Groq
-account are Free with paid billing disabled. This is a manual account confirmation,
-not an API-enforced billing guarantee. Model availability and free quota can change.
-Current account settings take precedence over old successful runs.
-
-The 60-call default (configurable from 1 to 300) counts embeddings, retries and
-fallback attempts across all live chats in one server process. The first quota
-response stops all subsequent live provider requests. There is no automatic paid
-upgrade. Counters survive development reloads but reset on process restart; check
-quota before restarting after a stop. They are not a distributed spending limit.
-Fake-ingested businesses remain offline even when real chat is enabled.
-
-Answers use Gemini; transient failures may use the configured Gemini fallback list
-or the existing Groq answer fallback. All attempts share the cap. A model-family
-fallback cannot judge itself in evaluations. Provider failures return a generic
-503, rather than pretending a website lacks the answer. Chat questions/answers
-are not saved by this app; providers receive live questions and retrieved text.
-
-## Review and rerun a fixed question list
-
-All commands below require the server to be stopped. Substitute the actual IDs and
-versions printed by `local-status`; do not enter the angle brackets literally.
-
-```sh
-npm run questions -- <business-uuid> list
-npm run questions -- <business-uuid> show <version>
-npm run questions -- <business-uuid> edit <version> <question-uuid> data/replacement.json
-npm run questions -- <business-uuid> approve <version>
-```
-
-A replacement contains `question`, `expectedBehavior` and `evidenceChunkIds`.
-Edits save a new unapproved version; old versions remain. Unknown or foreign
-references prevent approval. Approval records that an operator accepted a list
-for a run, not answer quality. Automatic approval of generated questions does not
-establish human review of each question. Website text and model replies are untrusted data.
-
-For a free-only rerun after reviewing the saved list, on this Mac:
-
-```sh
-LIVE_OK=yes FREE_TIER_CONFIRMED=yes npm run live -- https://synqlogic.com/ --reuse-snapshot --question-version <approved-version> --max-calls 100
-```
-
-The frozen mode makes no crawl, ingestion-embedding or question-generation calls.
-It requires an existing snapshot and approved list for that exact origin and
-embedding model, and never approves a different list. Query embeddings, answers
-and judging still consume free provider quota. The call cap includes retries.
-A short, explicitly identified per-minute limit can be waited out (up to three
-waits of at most 21 seconds); daily/unknown limits stop the run.
-
-For initial real ingestion or an intentionally new question set:
-
-```sh
-LIVE_OK=yes FREE_TIER_CONFIRMED=yes npm run live -- https://approved-site.example/ --max-calls 120
-```
-
-This stops after generating questions for review. `--approve-generated` is an
-explicit alternative for approving unflagged generated questions and immediately
-evaluating them; do not use it for a frozen comparison. The CLI loads only eval
-keys from `.env.local`; authorization and model overrides come from the process
-environment. Overrides: `GEMINI_TEXT_MODEL`, `GEMINI_ANSWER_MODEL`,
-`GEMINI_QUESTION_MODEL`, `GEMINI_TEXT_FALLBACK_MODELS` and `GROQ_MODEL`.
-
-Reports stay in ignored `reports/private/` and `data/eval-reports/` and in the local
-database. They are not encrypted or access-controlled by Git ignore rules.
-Missing verdicts and execution errors never count as passes. An independent
-judge also sees the source sections used to write each question, so missed
-retrieval does not make a refusal correct.
-
-## Offline checks and limitations
-
-### Owner meeting report (offline)
-
-Create one self-contained HTML file from a saved answer benchmark report and its
-matching saved benchmark (which contains the business record and website snapshot):
-
-```sh
-npm run owner-report -- data/benchmarks/2026-10-17/synq-answer-v7-judge-v2.json data/owner-reports/synq-v7.html data/benchmarks/2026-10-15/synq/ai-reviewed.json
-npm run owner-report -- data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json data/owner-reports/salon-v7-run2.html data/benchmarks/2026-10-15/salon/ai-reviewed.json
-```
-
-Open the resulting file directly from disk. Inline styles support phone widths and
-light/dark preferences; no scripts, models, database, credentials or network are
-needed. Page links only open when clicked. Output paths must be new, so saved
-reports cannot be overwritten accidentally. `data/owner-reports/` is git-ignored.
-The report shows the saved business name, questions, answers and cited page links;
-it omits internal identifiers, judge prompts/reasons, provider logs, tokens and costs.
-Results are provisional AI-grader checks from the saved report date, not human
-validation or a live deployment. Errors and missing checks are labeled “Needs work.”
-
-### Five-minute human judge calibration (offline)
-
-Generate a private 12-case review pack from saved reports. The command finds each
-matching frozen benchmark under `data/benchmarks/` and reconstructs contact
-evidence using in-memory Postgres. It makes no model or network calls and reads
-no credentials. Outputs must be new paths under the git-ignored `data/calibration/`:
-
-```sh
-npm run calibration-pack -- data/calibration/2026-10-17-v7.html data/benchmarks/2026-10-17/synq-answer-v7-judge-v2.json data/benchmarks/2026-10-17/salon-answer-v7-judge-v2-run2.json
-```
-
-All completed grader failures are included; execution errors are excluded. Passes
-cover source answers and refusals from both sites plus all available trap kinds.
-Selection is deterministic and fails if coverage cannot fit in 12 cases. The
-adjacent `.json` retains case IDs, exact text, provenance hashes and grader verdicts.
-It is a diagnostic sample, not an unbiased accuracy estimate. Grader failures are
-suspected problems to inspect, not established human judgments.
-
-1. Open the generated HTML file directly in a browser. Read each question, answer,
-   expected behaviour and saved evidence; choose **Good answer** or **Not good**.
-   The AI grader appears only after the choice. Saved website text is untrusted
-   evidence, never instructions. Reference/contact text is separate from citations.
-2. Optionally add a short note. For **Not good**, optionally mark dimensions you
-   personally checked. A missing dimension stays unmeasured. Progress should reach
-   **12 / 12 labeled**. Local browser storage is best effort; storage failures show
-   a warning and do not prevent labeling or downloading.
-3. Click **Download labels** and keep the downloaded JSON in `data/calibration/`.
-   It contains case IDs, choices, optional dimension checks, notes and timestamps,
-   with no name. Avoid personal information in notes. Keep the matching pack JSON.
-
-Compare the downloaded labels, supplying the reviewer's identity explicitly:
-
-```sh
-npm run calibration-compare -- data/calibration/2026-10-17-v7.json data/calibration/YOUR_DOWNLOADED_LABELS.json data/calibration/2026-10-17-comparison.json --reviewer Bosko
-```
-
-The comparison rejects mismatched, missing or duplicate labels, reports overall
-agreement and every disagreement, and reports dimension agreement only for
-explicit dimension checks on **Not good** cases. The 90% target is reported
-honestly, including a failure to reach it. Only this new comparison output says
-`humanReviewed: true`; the reviewer flag attests that Bosko supplied the labels.
-Benchmark reports and release gates are never changed. Engineering tests use
-synthetic labels and do not establish human calibration. Browser file storage and
-downloads vary by browser; the pack is self-contained and blocks network access.
-
-Optional learning exercise: before running the comparison, predict the agreement
-count from one label you intentionally change in a separate test copy.
-
-```sh
+```bash
 npm run typecheck
 npm test
 NEXT_TELEMETRY_DISABLED=1 npm run build
-npm run calibration
 ```
 
-With the server running separately, `npm run smoke` checks the home page, saved
-business pages, 404 behavior and invalid chat input over HTTP. It makes no model
-calls. The database packages remain external Node dependencies so their WASM and
-pgvector files can load correctly at runtime. Webpack is used for local builds to
-avoid the restored Turbopack build that stalled while reading OneDrive files.
+The tests use fictional sites, scripted models and injected transports. Their success checks implementation behavior, not real-model quality. These commands were checked against the source manifest, but were not rerun for the October 25, 2026 documentation review. Current GitHub-hosted CI status and the published workflow path still need reconciliation, so no CI badge is shown here.
 
-Tests use fictional websites, scripted model replies and injected HTTP transports;
-they make no live model or website requests. Fixed regression cases cover lists,
-process steps, contact facts, policies, coverage, business types and six trap kinds.
-Scripted success establishes plumbing and guards, not real model quality.
-`IFD_OUTPUT_ROOT` sends test reports to a temporary directory.
+## Where to inspect the work
 
-The four synthetic calibration cases intentionally give the fake judge 3/4
-agreement. That is not measured live-judge accuracy. Earlier manual reviews are
-small, informal checks; a separately saved, hand-labelled live calibration set is
-still needed for stronger judge evidence.
+| Path | Purpose |
+| --- | --- |
+| `docs/mcp.md`, `docs/mcp-case-study.md` | Protocol, security boundaries, fictional walkthrough and real-app setup |
+| `docs/evaluation-foundation.md`, `docs/ai-review.md` | Versioning, scoring dimensions and AI-review provenance |
+| `benchmarks/` | Saved public fixtures and retrieval comparisons |
+| `docs/ingestion.md`, `docs/validation.md` | Local loading, provider setup and dated validation |
+| `db/`, `src/`, `tests/` | Migrations, implementation and offline checks |
+| `docs/pilot.md` | Controlled pilot configuration and remaining gates |
 
-Crawler safeguards cover public-address validation, exact-origin scope,
-robots.txt and page/size/time caps. These layers and the answer checks do not prove
-resistance to every injection or every unsupported natural-language claim.
-Real retrieval thresholds still need calibration.
+## Limits
 
-Local chat limits are 10 requests per client and 60 per business per minute,
-using an HttpOnly SameSite cookie and bounded memory. Clearing cookies bypasses
-the client bucket; the business bucket remains. Pilot configuration requires
-shared Postgres counters and a persistent global provider-call cap, and rejects
-requests if shared storage fails. Browser identity is still cookie-based, so
-pilot access also requires a private invitation. The real Supabase concurrency
-probe, independent security review and accepted quality benchmarks remain gates.
-PGlite tests do not establish real Postgres multi-connection concurrency behavior.
+Website text is untrusted input. Crawler safeguards, prompts and answer checks do not prove resistance to every injection or unsupported statement. AI-reviewed labels remain provisional.
 
-### Live run 2026-10-10 and answer rules v2
+Local limits reset with the process. Pilot configuration has shared Postgres counters and persistent provider-call budgets, but implementation and local SQL checks do not establish hosted readiness. Human grader calibration, public deployment and customer outcomes remain separate evidence gates.
 
-Historical context: the first salon run stopped at a free limit and refused every
-question it reached. Rules v1 required excessive word overlap and copied lines.
-Subsequent changes allowed cited rewording, hybrid retrieval, clearer refusal
-reasons, exact citation IDs and numbered-list formatting. Dated run records above
-supersede the old “no real-site evaluations” status. Historical decisions remain
-in `docs/brief.md` and the AI OS project card.
+Read [SECURITY.md](SECURITY.md) before using real data or exposing a service. A project license has not been established in this review; the supplied repository listing contains no LICENSE file.
