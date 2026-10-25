@@ -1,5 +1,7 @@
 # Instant Front Desk (working name)
 
+[![Offline checks](https://github.com/skabo42000/instant-front-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/skabo42000/instant-front-desk/actions/workflows/ci.yml)
+
 Local prototype. Current maintenance record: October 22, 2026. Collect an approved business website,
 ask questions grounded in its saved pages, and inspect an answer score card.
 Built with Next.js, TypeScript, Tailwind, local Postgres (PGlite + pgvector),
