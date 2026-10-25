@@ -94,7 +94,7 @@ npm test
 NEXT_TELEMETRY_DISABLED=1 npm run build
 ```
 
-The tests use fictional sites, scripted models and injected transports. Their success checks implementation behavior, not real-model quality. These commands were checked against the source manifest, but were not rerun for the October 25, 2026 documentation review. Current GitHub-hosted CI status and the published workflow path still need reconciliation, so no CI badge is shown here.
+The tests use fictional sites, scripted models and injected transports. Their success checks implementation behavior, not real-model quality. GitHub-hosted CI is not enabled yet.
 
 ## Where to inspect the work
 
@@ -113,4 +113,4 @@ Website text is untrusted input. Crawler safeguards, prompts and answer checks d
 
 Local limits reset with the process. Pilot configuration has shared Postgres counters and persistent provider-call budgets, but implementation and local SQL checks do not establish hosted readiness. Human grader calibration, public deployment and customer outcomes remain separate evidence gates.
 
-Read [SECURITY.md](SECURITY.md) before using real data or exposing a service. A project license has not been established in this review; the supplied repository listing contains no LICENSE file.
+Read [SECURITY.md](SECURITY.md) before using real data or exposing a service. All rights reserved. The source is public so it can be reviewed as a portfolio project; please ask before reusing it.
