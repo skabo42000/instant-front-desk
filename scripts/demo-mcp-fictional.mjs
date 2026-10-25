@@ -92,6 +92,11 @@ export async function stopChild(child) {
 }
 
 async function main(mode) {
+  if (!mode || mode === '--stdio') {
+    const { fictionalStdioSession } = await import('./check-mcp-fictional.mjs');
+    console.log(JSON.stringify(await fictionalStdioSession({ writeTranscript: true }), null, 2));
+    return;
+  }
   if(mode==='--verify') {
     const result=JSON.parse(await readFile(path.join(output,'result.json'),'utf8'));
     assert.equal(result.mode,'--assistant'); assert.equal(result.success,true); assert.equal(result.processesStopped,true);
@@ -140,7 +145,7 @@ async function main(mode) {
     text=text.replaceAll(token,'[redacted]');
     assert.equal(code,0);assert.equal(timedOut,false);assert.equal(oversized,false);
     if(mode==='--smoke') {
-      const smoke=JSON.parse(text.trim());assert.deepEqual(smoke.tools,tools);
+      const smoke=JSON.parse(text.trim());assert.deepEqual(smoke.tools,['ask_business',...tools]);
       assert.equal(smoke.reports.length,1);
       assert.equal(smoke.reports[0].businessId,fixture.business.businessId);
       assert.equal(smoke.reports[0].report.id,fixture.report.id);

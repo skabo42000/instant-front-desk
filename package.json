@@ -47,7 +47,9 @@
     "check-shared": "node --conditions=react-server scripts/run-operations.cjs shared-check",
     "check-pilot": "node scripts/check-pilot.cjs",
     "mcp": "node scripts/run-mcp.cjs",
-    "mcp:smoke": "node scripts/check-mcp.cjs",
+    "mcp:smoke": "node scripts/check-mcp-fictional.mjs",
+    "mcp:smoke:local": "node scripts/check-mcp.cjs",
+    "mcp:demo": "node scripts/demo-mcp-fictional.mjs --stdio",
     "live-db": "node --conditions=react-server scripts/run-live-db.cjs"
   }
 }

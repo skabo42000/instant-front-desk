@@ -11,6 +11,9 @@ const cursor = z.number().int().min(0).max(10000);
 const page = { limit: z.number().int().min(1).max(10).optional(), cursor: cursor.optional() };
 export const listInput = z.strictObject(page);
 export const businessInput = z.strictObject({ businessId: uuid });
+export const askInput = z.strictObject({ businessId: uuid, question: z.string().max(2000).trim().min(1) });
+export const askOutput = z.strictObject({ businessId: uuid, kind: z.enum(["answer", "refusal"]),
+  text: z.string().max(4000), citations: z.array(z.strictObject({ id: uuid, pageUrl: publicUrl, heading: label })).max(8) });
 export const reportInput = z.strictObject({ businessId: uuid, ...page, reportId: uuid.optional() })
   .refine(v => !v.cursor || !!v.reportId, "Subsequent pages require the saved report ID");
 export const businessSchema = z.strictObject({ businessId: uuid, name: label, slug: label, sourceUrl: publicUrl });
@@ -25,6 +28,7 @@ export const reportOutput = z.strictObject({ businessId: uuid, report: z.strictO
   failures: z.array(failureSchema).max(10), nextCursor: cursor.nullable(),
 }).nullable(), truncated: z.boolean(), evidenceScope: z.literal("Saved evaluation only; not current service health or calibrated accuracy.") });
 export const contracts = {
+  ask_business: { input: askInput, output: askOutput },
   list_businesses: { input: listInput, output: listOutput },
   get_business: { input: businessInput, output: businessOutput },
   get_evaluation_report: { input: reportInput, output: reportOutput },

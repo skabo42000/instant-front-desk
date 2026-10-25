@@ -73,12 +73,12 @@ async function connected(transport:typeof fetch,settings=env,timeout=5000){
  const [a,b]=InMemoryTransport.createLinkedPair();await Promise.all([server.connect(a),client.connect(b)]);
  return {client,close:async()=>{await client.close();await server.close();}};
 }
-it("SDK discovers exactly three tools and calls each through HTTP without modifying records",async()=>{
+it("SDK discovers four tools and calls the three saved-data tools without modifying records",async()=>{
  const before=await db.query("SELECT business_id,id,report FROM eval_runs ORDER BY business_id,id");
  const transport=vi.fn(async(input:Parameters<typeof fetch>[0],init?:RequestInit)=>handler(new Request(String(input),{...init,headers:{...init?.headers,host:"127.0.0.1:3000"}}),String(input).split("/").pop()!));
  const c=await connected(transport);
  try{
-  expect((await c.client.listTools()).tools.map(t=>t.name).sort()).toEqual(["get_business","get_evaluation_report","list_businesses"]);
+  expect((await c.client.listTools()).tools.map(t=>t.name).sort()).toEqual(["ask_business","get_business","get_evaluation_report","list_businesses"]);
   for(const [name,args] of [["list_businesses",{}],["get_business",{businessId:A}],["get_evaluation_report",{businessId:A}]] as const){
    const result=await c.client.callTool({name,arguments:args});expect(result.isError).not.toBe(true);expect(result.structuredContent).toBeTruthy();
   }

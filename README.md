@@ -20,13 +20,16 @@ estimates and invitation-only pilot controls are implemented. See
 [evaluation evidence and limitations](docs/evaluation-foundation.md) and the
 [controlled pilot package and gates](docs/pilot.md). Nothing has been deployed.
 
-## Local MCP extension
+## MCP
 
-Three read-only MCP tools now expose explicitly approved business metadata and
-saved legacy evaluation reports through the running app's shared database. The
-API is disabled by default, loopback-only by configuration and unavailable in
-pilot mode. See [MCP setup, security bounds and verification](docs/mcp.md). This
-extension makes no model calls. A fictional-data connected-assistant demonstration was verified October 16 and rerun October 19, 2026; see [the dated case study](docs/mcp-case-study.md). This does not establish real-customer use.
+Four read-only MCP tools expose allowlisted business metadata, saved evaluations
+and the website chat's cited answer engine, with shared rate and provider-call
+limits. Built with AI coding agents; local prototype, no customer use or deployment.
+Read the [case study](docs/mcp-case-study.md) for design decisions, security fixes
+and evidence. With Node 22+ and dependencies installed (`npm ci`), run
+`npm run mcp:demo` for the [two-minute fictional demo](docs/mcp.md#two-minute-fictional-demo)
+and [transcript](docs/mcp-demo-transcript.md). It needs no keys or network listener;
+scripted replies demonstrate the protocol, not real-model quality.
 
 ## Legacy live evidence
 

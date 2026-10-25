@@ -1,12 +1,16 @@
 import "server-only";
 import type { PGlite } from "@electric-sql/pglite";
+import { randomUUID } from "node:crypto";
 import { contracts, MAX_RESPONSE_BYTES, mcpSettings, toolName, newNonce, validNonce, mcpProof, sameProof, type ToolName } from "./contracts";
 import { latestReport } from "../eval/runner";
 
 class ReadError extends Error { constructor(readonly status:number){super("MCP read rejected");} }
-export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Record<string,string|undefined>>) {
+export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Record<string,string|undefined>>,
+  chat?: (request: Request) => Promise<Response>) {
   // One-use challenges are bounded and expire within the adapter deadline.
   const pending=new Map<string,{proof:string;expires:number}>();
+  // One stable client bucket per MCP handler, in addition to the shared business bucket.
+  const clientId = randomUUID();
   return async (request:Request, name:string):Promise<Response> => {
     const reply=(data:unknown,status=200)=>Response.json(data,{status,headers:{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"}});
     if(env.IFD_MCP_ENABLED!=="yes" || env.IFD_PILOT_MODE==="yes")return reply({error:"Unavailable"},404);
@@ -41,10 +45,22 @@ export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Rec
         !sameProof(entry.proof,mcpProof(config.token,"client",context)))throw new ReadError(401);
       const raw=JSON.parse(body||"{}");
       const parsed=contracts[name].input.safeParse(raw);if(!parsed.success)throw new ReadError(400);
-      const args=parsed.data as {businessId?:string;limit?:number;cursor?:number;reportId?:string};
+      const args=parsed.data as {businessId?:string;question?:string;limit?:number;cursor?:number;reportId?:string};
       if(args.businessId&&!config.allowed.includes(args.businessId))throw new ReadError(404);
       const db=await getDb();
-      const output=await readTool(db,name,args,config.allowed);
+      let output: unknown;
+      if (name === "ask_business") {
+        const business = (await db.query<{slug:string}>("SELECT slug FROM businesses WHERE business_id=$1", [args.businessId])).rows[0];
+        if (!business) throw new ReadError(404);
+        if (!chat) throw new ReadError(503);
+        // Reuse chat's retrieval, answer checks, provider reservations and shared rate limits.
+        // No client-supplied cookies, URLs or provider settings cross this boundary.
+        const response = await chat(new Request(`${config.origin}/api/chat`, { method: "POST",
+          headers: { "content-type": "application/json", cookie: `ifd-client=${clientId}` },
+          body: JSON.stringify({ slug: business.slug, question: args.question }) }));
+        if (!response.ok) throw new ReadError(response.status);
+        output = { businessId: args.businessId, ...await response.json() };
+      } else output=await readTool(db,name,args,config.allowed);
       const validated=contracts[name].output.parse(output);
       if(Buffer.byteLength(JSON.stringify(validated))>MAX_RESPONSE_BYTES)throw new ReadError(413);
       const result=JSON.stringify(validated);
