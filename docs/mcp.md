@@ -55,7 +55,30 @@ The API checks the actual HTTP Host against the fixed loopback origin; Next may
 internally reconstruct `Request.url` with localhost, which is not used as an
 external destination. Requests with an Origin header, cross-site browser context,
 missing/wrong credentials, invalid IDs or bodies over 4 KiB are rejected. Responses
-are no-store. The configured secret is compared through constant-time digests.
+are no-store. Authentication was updated October 24, 2026 to address local-server
+impersonation (F1). Restart both app and adapter together; old token-header clients
+are rejected. The private `IFD_MCP_TOKEN` setting stays the same, but its value is
+never transmitted.
+
+Each call starts with a fresh random 32-byte client nonce and the tool input,
+without a credential. The app returns a fresh server nonce and an HMAC-SHA256
+server proof. The adapter verifies this proof before sending its client proof.
+Proofs use distinct server/client/result labels and bind the protocol version,
+configured origin, tool, exact JSON body and both nonces. Comparisons are constant
+time. A client proof authorizes only that request; the app consumes its challenge
+before database access, so a captured proof cannot be replayed. Challenges expire
+after five seconds and storage is capped at 256 pending entries per handler.
+The Next route retains one handler across requests. Restarting it invalidates all
+pending challenges. This local process design is unsuitable for load balancing.
+
+The response carries a separate HMAC over that same context and the exact result
+body. The adapter verifies it before parsing or trusting tool results. An impostor
+at the configured port receives only public inputs and a fresh nonce; fabricated
+challenges/results and stale proofs fail closed. Even a relay of a genuine
+challenge cannot change the request or fabricate an accepted result. This does
+not encrypt inputs/results, prevent local denial of service, or protect against
+a process that can read the private configuration. Use a random secret as above;
+weak passwords permit offline guessing from observed proofs.
 
 The adapter uses a fixed numeric loopback origin, rejects redirects, has a five-second
 whole-operation deadline, and caps streamed responses at 128 KiB. Pages contain at
@@ -73,6 +96,13 @@ handler with fictional fixtures. They cover scope, credentials, Host/Origin,
 strict schemas, pagination, null reports, execution errors, text/response limits,
 unavailable/malformed API replies, timeouts and redirects. Read tools preserve
 the stored evaluation rows in the fixture.
+
+`tests/unit/mcp-auth.test.ts` reproduces impostor services using injected HTTP
+and linked SDK transports: no sockets, credentials or saved database are needed.
+It checks absence of reusable credentials, rejected forged results, fresh nonces,
+relayed/tampered and replayed replies, one-use request proofs, role/request binding,
+challenge expiry/capacity, and unchanged disabled/pilot behavior. These simulations
+do not establish OS-level listener ownership or actual cross-user port takeover.
 
 `npm run mcp:smoke` uses a **real stdio child process** against the running app and
 saved owned-site records. This is scripted protocol evidence, not an assistant

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 export const MAX_RESPONSE_BYTES = 128 * 1024;
 export const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 const text = z.string().max(2000);
@@ -37,4 +38,14 @@ export function mcpSettings(env: Readonly<Record<string,string|undefined>>) {
   const allowed = (env.IFD_MCP_BUSINESS_IDS || "").split(",").map(v=>v.trim()).filter(Boolean);
   if (token.length < 32 || token.length > 256 || !/^[\x21-\x7e]+$/.test(token) || !allowed.length || allowed.length > 20 || allowed.some(id=>!uuid.safeParse(id).success)) throw Error("MCP requires a local secret and business allowlist");
   return { origin: origin.origin, token, allowed: [...new Set(allowed)].sort() };
+}
+
+// Separate roles and bind proofs to the exact origin, tool and wire body.
+export const newNonce = () => randomBytes(32).toString("hex");
+export const validNonce = (value:string) => /^[0-9a-f]{64}$/.test(value);
+export function mcpProof(secret:string, role:"server"|"client"|"result", context:readonly string[]) {
+  return createHmac("sha256",secret).update(JSON.stringify(["ifd-mcp-v1",role,...context])).digest("hex");
+}
+export function sameProof(supplied:string, expected:string) {
+  return typeof supplied === "string" && validNonce(supplied) && timingSafeEqual(Buffer.from(supplied,"hex"),Buffer.from(expected,"hex"));
 }

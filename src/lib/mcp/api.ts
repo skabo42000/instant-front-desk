@@ -1,11 +1,12 @@
 import "server-only";
-import { createHash, timingSafeEqual } from "node:crypto";
 import type { PGlite } from "@electric-sql/pglite";
-import { contracts, MAX_RESPONSE_BYTES, mcpSettings, toolName, type ToolName } from "./contracts";
+import { contracts, MAX_RESPONSE_BYTES, mcpSettings, toolName, newNonce, validNonce, mcpProof, sameProof, type ToolName } from "./contracts";
 import { latestReport } from "../eval/runner";
 
 class ReadError extends Error { constructor(readonly status:number){super("MCP read rejected");} }
 export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Record<string,string|undefined>>) {
+  // One-use challenges are bounded and expire within the adapter deadline.
+  const pending=new Map<string,{proof:string;expires:number}>();
   return async (request:Request, name:string):Promise<Response> => {
     const reply=(data:unknown,status=200)=>Response.json(data,{status,headers:{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"}});
     if(env.IFD_MCP_ENABLED!=="yes" || env.IFD_PILOT_MODE==="yes")return reply({error:"Unavailable"},404);
@@ -15,15 +16,30 @@ export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Rec
       // Next reconstructs Request.url with localhost internally; validate the actual HTTP Host.
       if(request.headers.get("host")!==new URL(config.origin).host || request.headers.has("origin") ||
         ![null,"none","same-origin"].includes(request.headers.get("sec-fetch-site")))throw new ReadError(403);
-      const supplied=request.headers.get("x-ifd-mcp-token")||"";
-      const digest=(s:string)=>createHash("sha256").update(s).digest();
-      if(supplied.length>256 || !timingSafeEqual(digest(supplied),digest(config.token)))throw new ReadError(401);
       if(!toolName(name))throw new ReadError(404);
       if(!request.headers.get("content-type")?.startsWith("application/json"))throw new ReadError(400);
       // Read incrementally: Content-Length alone cannot bound chunked requests.
       const reader=request.body?.getReader();let bytes=0;const parts:Uint8Array[]=[];
       if(reader)try{for(;;){const r=await reader.read();if(r.done)break;bytes+=r.value.byteLength;if(bytes>4096){await reader.cancel();throw new ReadError(413);}parts.push(r.value);}}finally{reader.releaseLock();}
-      const raw=JSON.parse(Buffer.concat(parts).toString("utf8")||"{}");
+      const body=Buffer.concat(parts).toString("utf8");
+      const clientNonce=request.headers.get("x-ifd-mcp-nonce")||"";
+      if(!validNonce(clientNonce))throw new ReadError(401);
+      const serverNonce=request.headers.get("x-ifd-mcp-challenge")||"";
+      const context=[config.origin,name,body,clientNonce,serverNonce];
+      if(request.headers.get("x-ifd-mcp-phase")==="challenge") {
+        const now=Date.now();
+        for(const [nonce,entry] of pending)if(entry.expires<=now)pending.delete(nonce);
+        if(pending.size>=256)throw new ReadError(503);
+        const nonce=newNonce();context[4]=nonce;
+        pending.set(nonce,{proof:mcpProof(config.token,"client",context),expires:now+5000});
+        return reply({nonce,proof:mcpProof(config.token,"server",context)});
+      }
+      const entry=pending.get(serverNonce);
+      // Consume before any await or database access, including failed authentication.
+      pending.delete(serverNonce);
+      if(!entry || entry.expires<=Date.now() || !sameProof(request.headers.get("x-ifd-mcp-proof")||"",entry.proof) ||
+        !sameProof(entry.proof,mcpProof(config.token,"client",context)))throw new ReadError(401);
+      const raw=JSON.parse(body||"{}");
       const parsed=contracts[name].input.safeParse(raw);if(!parsed.success)throw new ReadError(400);
       const args=parsed.data as {businessId?:string;limit?:number;cursor?:number;reportId?:string};
       if(args.businessId&&!config.allowed.includes(args.businessId))throw new ReadError(404);
@@ -31,7 +47,9 @@ export function createMcpReadHandler(getDb:()=>Promise<PGlite>, env:Readonly<Rec
       const output=await readTool(db,name,args,config.allowed);
       const validated=contracts[name].output.parse(output);
       if(Buffer.byteLength(JSON.stringify(validated))>MAX_RESPONSE_BYTES)throw new ReadError(413);
-      return reply(validated);
+      const result=JSON.stringify(validated);
+      return new Response(result,{headers:{"content-type":"application/json","Cache-Control":"no-store","X-Content-Type-Options":"nosniff",
+        "x-ifd-mcp-proof":mcpProof(config.token,"result",[...context,result])}});
     } catch(error) { return reply({error:"MCP read unavailable"},error instanceof ReadError?error.status:error instanceof SyntaxError?400:503); }
   };
 }

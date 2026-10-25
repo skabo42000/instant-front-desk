@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import fixture from "../fixtures/mcp-maple-street-dental.json";
 import { assertFictionalEnvironment, createFictionalDatabase } from "../../scripts/mcp-fictional-api";
+import { authenticatedMcpRequest } from "../helpers/mcp-auth";
 import { createMcpReadHandler } from "../../src/lib/mcp/api";
 // The runner is a standalone Node module, deliberately outside the TS application.
 // @ts-expect-error Standalone .mjs has no declaration file.
@@ -16,7 +17,7 @@ beforeAll(async()=>{
 });
 afterAll(async()=>{await db?.close();});
 async function call(name:string,args:unknown={}) {
-  return handler(new Request(`http://127.0.0.1:3000/api/mcp/${name}`,{method:"POST",headers:{host:"127.0.0.1:3000","content-type":"application/json","x-ifd-mcp-token":token},body:JSON.stringify(args)}),name);
+  return handler(await authenticatedMcpRequest(handler,name,args,token),name);
 }
 it("loads only the fictional business, invented report and saved content; reads leave all records unchanged",async()=>{
   const tables=["businesses","crawl_runs","pages","chunks","question_lists","eval_questions","eval_runs","eval_results","model_requests"];
