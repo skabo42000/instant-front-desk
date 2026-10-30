@@ -22,7 +22,7 @@
     "embedded-postgres": "18.4.0-beta.17",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.12"
   },
   "scripts": {
     "calibration-pack": "node --conditions=react-server scripts/run-calibration-pack.cjs pack",
